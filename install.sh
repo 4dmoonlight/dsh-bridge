@@ -173,11 +173,12 @@ install_mac() {
   command -v swift >/dev/null 2>&1 || die "swift toolchain required (xcode-select --install)"
   step "build macOS client"
   # Sandboxed/CI shells cannot nest SwiftPM's own sandbox; opt out explicitly there.
-  SWIFT_FLAGS=()
+  # bash 3.2 (macOS /bin/bash) errors on expanding an empty array under set -u.
   if [ "${DSH_RELAY_SWIFTPM_SANDBOX:-}" = "disable" ]; then
-    SWIFT_FLAGS+=(--disable-sandbox --cache-path "$STATE_DIR/swift-cache")
+    ( cd "$ROOT/apps/macos" && run swift build -c release --disable-sandbox --cache-path "$STATE_DIR/swift-cache" ) || die "swift build failed"
+  else
+    ( cd "$ROOT/apps/macos" && run swift build -c release ) || die "swift build failed"
   fi
-  ( cd "$ROOT/apps/macos" && run swift build -c release "${SWIFT_FLAGS[@]}" ) || die "swift build failed"
   local bin="$ROOT/apps/macos/.build/release/relay-sync"
   if [ "$DRY_RUN" != "1" ] && [ ! -x "$bin" ]; then die "missing release binary"; fi
   run mkdir -p "$PREFIX/bin"

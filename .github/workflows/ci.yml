@@ -27,3 +27,5 @@ jobs:
       - name: swift test
         working-directory: apps/macos
         run: swift test
+      - name: installer dry-run (bash 3.2)
+        run: bash install.sh all --dry-run
