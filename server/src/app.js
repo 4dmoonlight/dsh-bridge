@@ -196,8 +196,11 @@ export async function createRelayApp(options) {
 
     if (method === 'GET' && path === '/v1/host/commands') {
       const device = requireDevice(req);
-      const waitMs = clampInt(url.searchParams.get('wait'), 25000, 0, 55000);
-      const result = await relay.park(device.id, waitMs);
+      // `wait` is seconds (protocol: clamped 0-55 s), not milliseconds. Reading it
+      // as ms made a 20 s poll expire after 20 ms, so the host was almost never
+      // parked and live dispatch kept answering 409 host_offline.
+      const waitSeconds = clampInt(url.searchParams.get('wait'), 25, 0, 55);
+      const result = await relay.park(device.id, waitSeconds * 1000);
       if (!result) return sendEmpty(res, 204);
       return sendJson(res, 200, { command: result.command });
     }

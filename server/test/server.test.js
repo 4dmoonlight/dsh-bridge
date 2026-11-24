@@ -214,13 +214,29 @@ test('sessions and devices survive a restart', async () => {
   }
 });
 
+test('host poll waits the requested number of seconds', async () => {
+  const relay = await startRelay();
+  try {
+    const { token } = await registerDevice(relay.url, 'mac-mini');
+    const startedAt = Date.now();
+    const poll = await call(relay.url, '/v1/host/commands?wait=1', { token });
+    const elapsed = Date.now() - startedAt;
+    assert.equal(poll.status, 204);
+    // Regression: `wait` used to be read as milliseconds, so a 1 s poll returned
+    // after 1 ms and the host was never parked when a live fetch arrived.
+    assert.ok(elapsed >= 900, `poll returned after ${elapsed}ms, expected about 1000ms`);
+  } finally {
+    await relay.stop();
+  }
+});
+
 test('host long-poll relay forwards a command and returns the host result', async () => {
   const relay = await startRelay({ commandTimeoutMs: 5000 });
   try {
     const { token, device } = await registerDevice(relay.url, 'mac-mini');
 
     // The host parks one poll. Do not await it: it only resolves once dispatched.
-    const pollPromise = call(relay.url, '/v1/host/commands?wait=5000', { token });
+    const pollPromise = call(relay.url, '/v1/host/commands?wait=5', { token });
     await new Promise((resolve) => setTimeout(resolve, 200));
 
     const relayCall = call(relay.url, '/v1/relay/sessions/sess-live/fetch', {
