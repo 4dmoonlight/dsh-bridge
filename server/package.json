@@ -1,0 +1,14 @@
+{
+  "name": "@dsh-relay-sync/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Zero-dependency relay server for dsh-relay-sync",
+  "engines": {
+    "node": ">=22.5"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test test/"
+  }
+}

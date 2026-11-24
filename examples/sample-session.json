@@ -1,0 +1,19 @@
+{
+  "protocol": "relay/1",
+  "full": false,
+  "sessions": [
+    {
+      "id": "sample-session-1",
+      "title": "Migrate the billing worker",
+      "workspace": "/Users/me/Dev/billing",
+      "engine": "dsh",
+      "createdAt": "2026-11-20T09:00:00.000Z",
+      "updatedAt": "2026-11-20T09:42:11.000Z",
+      "messages": [
+        { "role": "user", "text": "Why does the billing worker retry forever?" },
+        { "role": "assistant", "text": "The retry counter is never incremented on HTTP 429. Fix it in worker.ts." }
+      ]
+    }
+  ],
+  "deleted": []
+}
