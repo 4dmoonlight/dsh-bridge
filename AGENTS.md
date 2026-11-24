@@ -17,7 +17,7 @@ Relay-mediated **session sync** for DeepSeek Harness on macOS:
 Local machine, everything at once:
 
 ```bash
-git clone https://github.com/OWNER/dsh-relay-sync.git
+git clone https://github.com/4dmoonlight/dsh-relay-sync.git
 cd dsh-relay-sync
 ./install.sh all --yes
 ```
@@ -25,7 +25,7 @@ cd dsh-relay-sync
 Remote relay already running at `$RELAY` with token `$TOKEN`:
 
 ```bash
-git clone https://github.com/OWNER/dsh-relay-sync.git
+git clone https://github.com/4dmoonlight/dsh-relay-sync.git
 cd dsh-relay-sync
 ./install.sh mac --relay "$RELAY" --token "$TOKEN" --yes
 ```

@@ -30,7 +30,7 @@ Mac (relay-sync)  ──push──►  中转服务器 (relay)  ◄──list/re
 要求：macOS 13+、Node ≥ 22.5、Xcode 命令行工具、`zstd`（`brew install zstd`）。
 
 ```bash
-git clone https://github.com/OWNER/dsh-relay-sync.git
+git clone https://github.com/4dmoonlight/dsh-relay-sync.git
 cd dsh-relay-sync
 ./install.sh all
 ```

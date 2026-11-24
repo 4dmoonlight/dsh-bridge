@@ -40,7 +40,7 @@ Requirements: macOS 13+, Node ≥ 22.5, Xcode command line tools, `zstd`
 (`brew install zstd`).
 
 ```bash
-git clone https://github.com/OWNER/dsh-relay-sync.git
+git clone https://github.com/4dmoonlight/dsh-relay-sync.git
 cd dsh-relay-sync
 ./install.sh all
 ```

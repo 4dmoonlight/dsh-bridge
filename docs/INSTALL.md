@@ -14,7 +14,7 @@ Two halves: the **relay server** (runs anywhere with Node) and the **macOS app**
 ## One-click (same machine)
 
 ```bash
-git clone https://github.com/OWNER/dsh-relay-sync.git
+git clone https://github.com/4dmoonlight/dsh-relay-sync.git
 cd dsh-relay-sync
 ./install.sh all
 ```
@@ -41,7 +41,7 @@ Verify:
 On the server (Linux or macOS, Node ≥ 22.5):
 
 ```bash
-git clone https://github.com/OWNER/dsh-relay-sync.git
+git clone https://github.com/4dmoonlight/dsh-relay-sync.git
 cd dsh-relay-sync
 RELAY_TOKEN="$(node -e 'process.stdout.write(require("crypto").randomBytes(32).toString("base64url"))')" \
 RELAY_PORT=8787 RELAY_DATA_DIR=/var/lib/dsh-relay-sync \
