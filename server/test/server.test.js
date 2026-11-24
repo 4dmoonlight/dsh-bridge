@@ -230,6 +230,35 @@ test('host poll waits the requested number of seconds', async () => {
   }
 });
 
+test('fallback stored answers when a parked host never replies', async () => {
+  const relay = await startRelay();
+  try {
+    const { token, device } = await registerDevice(relay.url, 'mac-mini');
+    await call(relay.url, '/v1/sessions/sync', {
+      method: 'POST',
+      token,
+      body: { protocol: 'relay/1', sessions: [sessionPayload({ id: 'sess-stale' })] },
+    });
+
+    // Park a poll and never answer it, the way a host does when it dies behind a
+    // proxy that keeps the origin request open.
+    const parked = call(relay.url, '/v1/host/commands?wait=30', { token });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    const res = await call(relay.url, '/v1/relay/sessions/sess-stale/fetch', {
+      method: 'POST',
+      body: { deviceId: device.id, fallback: 'stored', timeoutMs: 500 },
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.json.source, 'stored');
+    assert.equal(res.json.session.id, 'sess-stale');
+
+    parked.catch(() => {});
+  } finally {
+    await relay.stop();
+  }
+});
+
 test('a host that disconnects withdraws its parked poll', async () => {
   const relay = await startRelay();
   try {

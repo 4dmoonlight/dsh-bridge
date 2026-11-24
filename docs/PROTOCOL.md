@@ -110,7 +110,12 @@ Only the newest poll for a device receives commands; a new poll cancels the old 
   `200 { "source": "live", "session": { … } }`;
 - host is offline → `409 host_offline`, unless `fallback: "stored"` was sent, in which case
   the stored copy comes back as `{ "source": "stored", … }`;
-- host does not answer in time → `504 host_timeout`; host reports failure → `502`.
+- host does not answer in time → `504 host_timeout`, or the stored copy when
+  `fallback: "stored"` was sent. A proxy in front of the relay (a Cloudflare
+  tunnel, for instance) cannot report that the host's socket died, so a dead host
+  keeps its poll parked until the wait runs out; without this rule the caller would
+  see a timeout where an offline host would have produced the stored copy;
+- host reports failure → `502`.
 
 ## Errors
 

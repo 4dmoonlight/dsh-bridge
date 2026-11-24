@@ -247,7 +247,19 @@ export async function createRelayApp(options) {
         throw new HttpError(409, 'host_offline', `device ${deviceId} is not connected`);
       }
       const timeoutMs = clampInt(body.timeoutMs, 8000, 500, 30000);
-      const payload = await relay.dispatch(deviceId, 'session.fetch', { sessionId }, timeoutMs);
+      let payload;
+      try {
+        payload = await relay.dispatch(deviceId, 'session.fetch', { sessionId }, timeoutMs);
+      } catch (error) {
+        // Behind a proxy (a Cloudflare tunnel, say) the relay never sees the host's
+        // socket close, so a dead host keeps its parked poll until the wait elapses.
+        // For a caller that asked for the stored copy, a host that does not answer is
+        // as good as an offline one — better than surfacing a timeout.
+        if (stored && body.fallback === 'stored' && error instanceof HttpError && error.code === 'host_timeout') {
+          return sendJson(res, 200, { source: 'stored', session: stored });
+        }
+        throw error;
+      }
       const ok = /** @type {any} */ (payload).ok;
       if (!ok) {
         const error = /** @type {any} */ (payload).error;
