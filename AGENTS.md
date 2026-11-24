@@ -14,8 +14,8 @@ Relay-mediated **session sync** for DeepSeek Harness on macOS:
 
 ## Non-interactive install (copy-paste)
 
-The repo is **private**: run `gh auth login` (or clone with a token) first, and confirm
-`gh repo view 4dmoonlight/dsh-relay-sync` succeeds before installing.
+The repo is public: plain `git clone` works. If you fork it privately, pass a
+read token to the deploy script (`--github-token`).
 
 Local machine, everything at once:
 
