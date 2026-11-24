@@ -62,6 +62,11 @@ inbound port on the Mac.
 Both references solve the same problem with different trade-offs; this MVP picks
 the smallest slice that still gives *relay-mediated session sync*.
 
+- [ds-harness-remote](https://github.com/liguobao/ds-harness-remote) — WebSocket control
+  plane, blind relay, Noise E2E; the server never stores session content.
+- [dsh-mobile-plugin](https://github.com/WNLUO/dsh-mobile-plugin) — host dials out over
+  WSS with a binary frame codec and QR/code pairing.
+
 | | ds-harness-remote | dsh-mobile-plugin | dsh-relay-sync (this repo) |
 | --- | --- | --- | --- |
 | Transport | WebSocket control + blind relay + optional WebRTC/TURN | outbound WSS tunnel, binary frames | HTTP long-poll, no websocket |
