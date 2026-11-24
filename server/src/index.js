@@ -25,7 +25,11 @@ console.log(
     tokenSource: process.env.RELAY_TOKEN || args.token ? 'env' : 'file',
   }),
 );
-console.log(`relay token: ${token}`);
+// Never print the token: stdout goes to journald/supervisors. It is already in
+// RELAY_TOKEN or the 0600 data-dir token file; use `relay-sync doctor` to check it.
+if (!process.env.RELAY_TOKEN && !args.token) {
+  console.log(`relay token file: ${join(dataDir, 'instance-token')}`);
+}
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, async () => {

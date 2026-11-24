@@ -113,6 +113,11 @@ if [ -n "$GITHUB_TOKEN" ]; then
       ;;
   esac
 fi
+# Re-runs run as root over a checkout owned by $SERVICE_USER, which git refuses
+# ("dubious ownership"). Scope the exception to this one directory.
+if ! run git config --global --get-all safe.directory 2>/dev/null | grep -qxF "$INSTALL_DIR"; then
+  run git config --global --add safe.directory "$INSTALL_DIR"
+fi
 if [ -d "$INSTALL_DIR/.git" ]; then
   run git -C "$INSTALL_DIR" remote set-url origin "$clone_url"
   run git -C "$INSTALL_DIR" fetch --depth 1 origin main
@@ -129,22 +134,30 @@ fi
 run chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"
 
 step "instance token"
-if [ -f "$ENV_FILE" ] && grep -q '^RELAY_TOKEN=' "$ENV_FILE"; then
-  log "reusing $ENV_FILE"
+# Rewrite the file whole: appending on every re-run left duplicate keys
+# (last one wins in systemd, so a changed --port silently did nothing).
+prev_token=""
+if [ -f "$ENV_FILE" ]; then
+  prev_token="$(sed -n 's/^RELAY_TOKEN=//p' "$ENV_FILE" | head -1)"
+fi
+if [ -n "$prev_token" ]; then
+  token="$prev_token"
+  log "reusing token in $ENV_FILE"
 elif [ -n "${RELAY_TOKEN:-}" ]; then
-  umask 077
-  printf 'RELAY_TOKEN=%s\n' "$RELAY_TOKEN" > "$ENV_FILE"
+  token="$RELAY_TOKEN"
   log "wrote token from RELAY_TOKEN"
 else
-  umask 077
-  printf 'RELAY_TOKEN=%s\n' "$("$NODE_BIN" -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("base64url"))')" > "$ENV_FILE"
+  token="$("$NODE_BIN" -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("base64url"))')"
   log "generated a new token in $ENV_FILE"
 fi
+umask 077
 {
+  printf 'RELAY_TOKEN=%s\n' "$token"
   printf 'RELAY_PORT=%s\n' "$PORT"
   printf 'RELAY_HOST=127.0.0.1\n'
   printf 'RELAY_DATA_DIR=%s\n' "$DATA_DIR"
-} >>"$ENV_FILE"
+} >"$ENV_FILE"
+unset token prev_token
 chmod 0640 "$ENV_FILE"
 chown root:"$SERVICE_USER" "$ENV_FILE"
 TOKEN="$(sed -n 's/^RELAY_TOKEN=//p' "$ENV_FILE")"
