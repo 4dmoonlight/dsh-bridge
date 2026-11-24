@@ -11,6 +11,11 @@ Two halves: the **relay server** (runs anywhere with Node) and the **macOS app**
 | macOS app | macOS 13+, Xcode command line tools (`swift`), `zstd` (`brew install zstd`) for compressed DSH session files |
 | DSH | `~/.dsh/sessions` populated by a normal DeepSeek Harness install |
 
+> This repository is **private**. Authenticate first (`gh auth login`, or clone with a
+> token: `git clone https://<token>@github.com/4dmoonlight/dsh-relay-sync.git`), and make
+> sure every machine that installs from it has access. The `raw.githubusercontent.com`
+> URLs below only work for authenticated users.
+
 ## One-click (same machine)
 
 ```bash
