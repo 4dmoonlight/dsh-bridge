@@ -230,6 +230,33 @@ test('host poll waits the requested number of seconds', async () => {
   }
 });
 
+test('a host that disconnects withdraws its parked poll', async () => {
+  const relay = await startRelay();
+  try {
+    const { token, device } = await registerDevice(relay.url, 'mac-mini');
+    const abort = new AbortController();
+    const poll = fetch(`${relay.url}/v1/host/commands?wait=30`, {
+      headers: { authorization: `Bearer ${token}` },
+      signal: abort.signal,
+    }).catch(() => null);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    abort.abort();
+    await poll;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    // A dead host must look offline, not swallow the command and time out.
+    const res = await call(relay.url, '/v1/relay/sessions/sess-live/fetch', {
+      method: 'POST',
+      body: { deviceId: device.id, timeoutMs: 1000 },
+    });
+    assert.equal(res.status, 409);
+    assert.equal(res.json.error.code, 'host_offline');
+  } finally {
+    await relay.stop();
+  }
+});
+
 test('host long-poll relay forwards a command and returns the host result', async () => {
   const relay = await startRelay({ commandTimeoutMs: 5000 });
   try {

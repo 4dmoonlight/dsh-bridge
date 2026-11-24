@@ -200,7 +200,20 @@ export async function createRelayApp(options) {
       // as ms made a 20 s poll expire after 20 ms, so the host was almost never
       // parked and live dispatch kept answering 409 host_offline.
       const waitSeconds = clampInt(url.searchParams.get('wait'), 25, 0, 55);
-      const result = await relay.park(device.id, waitSeconds * 1000);
+      // Withdraw the poll as soon as the host's connection drops, so a dead host
+      // reports host_offline (and falls back to stored) instead of swallowing a
+      // dispatched command and returning host_timeout.
+      const withdrawn = new AbortController();
+      const onClose = () => {
+        if (!res.writableEnded) withdrawn.abort();
+      };
+      res.on('close', onClose);
+      let result;
+      try {
+        result = await relay.park(device.id, waitSeconds * 1000, withdrawn.signal);
+      } finally {
+        res.off('close', onClose);
+      }
       if (!result) return sendEmpty(res, 204);
       return sendJson(res, 200, { command: result.command });
     }

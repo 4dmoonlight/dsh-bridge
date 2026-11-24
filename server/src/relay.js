@@ -38,11 +38,18 @@ export class RelayHub {
 
   /**
    * Park a host poll. Resolves with {command} when dispatched, or null on timeout.
+   *
+   * `signal` lets the caller withdraw the poll when the host socket dies. Without
+   * it a killed host kept a parked poll for the rest of its wait window, so live
+   * fetches were dispatched into the void and timed out (504) instead of falling
+   * back to the stored copy (409 host_offline).
+   *
    * @param {string} deviceId
    * @param {number} waitMs
+   * @param {AbortSignal} [signal]
    * @returns {Promise<{command: any} | null>}
    */
-  park(deviceId, waitMs) {
+  park(deviceId, waitMs, signal) {
     this.markSeen(deviceId);
     this.waiters.get(deviceId)?.cancel();
 
@@ -53,10 +60,12 @@ export class RelayHub {
       resolveFn = resolve;
     });
 
+    let onAbort = null;
     const finish = (value) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (onAbort && signal) signal.removeEventListener('abort', onAbort);
       if (this.waiters.get(deviceId)?.cancel === cancel) this.waiters.delete(deviceId);
       resolveFn(value);
     };
@@ -72,6 +81,15 @@ export class RelayHub {
     };
 
     this.waiters.set(deviceId, { deliver, cancel });
+
+    if (signal) {
+      if (signal.aborted) {
+        finish(null);
+      } else {
+        onAbort = () => finish(null);
+        signal.addEventListener('abort', onAbort, { once: true });
+      }
+    }
     return promise;
   }
 
