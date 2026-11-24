@@ -13,6 +13,11 @@ test('health and meta describe the protocol', async () => {
     const meta = await call(relay.url, '/v1/meta', { token: null });
     assert.equal(meta.status, 200);
     assert.equal(meta.json.capabilities.sessionSync, true);
+
+    // HEAD is GET without a body: `curl -I`-style health checks must not 404.
+    const head = await call(relay.url, '/healthz', { method: 'HEAD', token: null });
+    assert.equal(head.status, 200);
+    assert.equal(head.json, null);
   } finally {
     await relay.stop();
   }

@@ -65,7 +65,10 @@ export async function createRelayApp(options) {
   async function handle(req, res) {
     const url = new URL(req.url ?? '/', 'http://relay.local');
     const path = url.pathname.replace(/\/+$/, '') || '/';
-    const method = req.method ?? 'GET';
+    // HTTP requires HEAD to behave like GET without a body. Node already marks the
+    // response bodyless for HEAD requests, so mapping the method is enough — and it
+    // keeps health checks that use `curl -I` from seeing a spurious 404.
+    const method = req.method === 'HEAD' ? 'GET' : (req.method ?? 'GET');
 
     if (method === 'OPTIONS') {
       return sendEmpty(res, 204, {

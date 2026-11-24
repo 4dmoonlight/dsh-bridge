@@ -49,6 +49,8 @@ Clients should trim before pushing: `relay-sync` keeps the last 200 messages and
 { "ok": true, "protocol": "relay/1", "version": "0.1.0", "serverTime": "…", "uptimeSec": 12, "devices": 1, "sessions": 3 }
 ```
 
+`HEAD /healthz` is answered like `GET` with an empty body, so `curl -I` works.
+
 ### `GET /v1/meta` (no auth)
 Capabilities, so clients can degrade instead of guessing.
 
