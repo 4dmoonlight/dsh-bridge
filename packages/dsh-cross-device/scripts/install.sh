@@ -8,6 +8,11 @@
 set -euo pipefail
 
 PROFILE="${DSH_PROFILE:-$HOME/.dsh/profiles/web}"
+# DSH exports DSH_PROFILE=<name> (not a path); resolve relative names under ~/.dsh/profiles.
+case "$PROFILE" in
+  /*) ;;
+  *) PROFILE="$HOME/.dsh/profiles/$PROFILE" ;;
+esac
 PKG_NAME="dsh-cross-device"
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PATCH="$PROFILE/cordis.patch.yml"
