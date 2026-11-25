@@ -71,12 +71,12 @@ Never hand-edit `relay-store.json`; restart the relay and re-push instead.
 ## Repository map
 
 ```
-server/src/app.js      routes + auth + error mapping
-server/src/store.js    JSON store, atomic writes, revision counter
-server/src/relay.js    long-poll command relay, timeouts
-server/src/events.js   SSE hub
-server/src/model.js    session validation/normalization
-server/test/*.test.js  node:test suite (12 tests)
+apps/server/src/app.js      routes + auth + error mapping
+apps/server/src/store.js    JSON store, atomic writes, revision counter
+apps/server/src/relay.js    long-poll command relay, timeouts
+apps/server/src/events.js   SSE hub
+apps/server/src/model.js    session validation/normalization
+apps/server/test/*.test.js  node:test suite (12 tests)
 apps/macos/Sources/RelaySyncKit/   models, client, DSHReader, SyncEngine, config
 apps/macos/Sources/RelaySyncCLI/   main.swift (CLI) + UI.swift (SwiftUI)
 apps/macos/Tests/                  XCTest suite
@@ -88,7 +88,7 @@ docs/ARCHITECTURE.md               data paths + comparison with references
 ## Development commands
 
 ```bash
-cd server && npm test                      # no install step, no dependencies
+cd apps/server && npm test                      # no install step, no dependencies
 cd apps/macos && swift build && swift test
 bash scripts/e2e.sh                        # needs node + swift + zstd
 ```

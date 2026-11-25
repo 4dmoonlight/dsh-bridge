@@ -66,7 +66,7 @@ cd dsh-relay-sync
 
 ```bash
 RELAY_TOKEN=secret RELAY_PORT=8787 RELAY_DATA_DIR=~/.dsh-relay-sync/relay-data \
-  node server/src/index.js
+  node apps/server/src/index.js
 ```
 
 远程部署请务必放在 TLS 反代后面（Caddy/nginx/Cloudflare Tunnel），见 [docs/INSTALL.md](docs/INSTALL.md)。
@@ -82,7 +82,7 @@ RELAY_TOKEN=secret RELAY_PORT=8787 RELAY_DATA_DIR=~/.dsh-relay-sync/relay-data \
 ## 测试
 
 ```bash
-cd server && npm test          # 12 个用例：鉴权、同步、跳过旧快照、重启持久化、实时中转、SSE
+cd apps/server && npm test          # 12 个用例：鉴权、同步、跳过旧快照、重启持久化、实时中转、SSE
 cd apps/macos && swift test    # 模型、配置、DSH v4 解析
 bash scripts/e2e.sh            # 起真中转 + 真二进制，验证 live 与 stored 两条路径
 ```

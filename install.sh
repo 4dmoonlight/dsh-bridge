@@ -114,7 +114,7 @@ install_relay() {
 
   if [ "$NO_AGENT" = "1" ]; then
     log "no launch agent requested; start manually:"
-    log "  RELAY_TOKEN=$TOKEN RELAY_PORT=$PORT node $ROOT/server/src/index.js"
+    log "  RELAY_TOKEN=$TOKEN RELAY_PORT=$PORT node $ROOT/apps/server/src/index.js"
     return 0
   fi
 
@@ -132,7 +132,7 @@ install_relay() {
   <key>ProgramArguments</key>
   <array>
     <string>$(command -v node)</string>
-    <string>$ROOT/server/src/index.js</string>
+    <string>$ROOT/apps/server/src/index.js</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>

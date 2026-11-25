@@ -78,7 +78,7 @@ Zero dependencies:
 
 ```bash
 RELAY_TOKEN=secret RELAY_PORT=8787 RELAY_DATA_DIR=~/.dsh-relay-sync/relay-data \
-  node server/src/index.js
+  node apps/server/src/index.js
 ```
 
 For remote deployments always put it behind TLS (Caddy, nginx, Cloudflare Tunnel).
@@ -95,7 +95,7 @@ See [docs/INSTALL.md](docs/INSTALL.md).
 ## Tests
 
 ```bash
-cd server && npm test          # 12 cases: auth, sync, stale skip, restart, live relay, SSE
+cd apps/server && npm test          # 12 cases: auth, sync, stale skip, restart, live relay, SSE
 cd apps/macos && swift test    # models, config, DSH v4 parsing
 bash scripts/e2e.sh            # real relay + real binary, live and stored paths
 ```

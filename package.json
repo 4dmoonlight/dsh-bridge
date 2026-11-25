@@ -1,0 +1,16 @@
+{
+  "name": "dsh-relay-sync",
+  "private": true,
+  "version": "0.2.0",
+  "description": "Relay-mediated DSH session sync: relay server, macOS client and the cross-device plugin",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/4dmoonlight/dsh-relay-sync.git"
+  },
+  "scripts": {
+    "test": "pnpm -r --if-present test",
+    "test:server": "pnpm --dir apps/server test",
+    "e2e": "bash scripts/e2e.sh"
+  }
+}

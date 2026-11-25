@@ -21,7 +21,7 @@ echo "== node $(node --version)"
 
 echo "== start relay on 127.0.0.1:$PORT"
 RELAY_DATA_DIR="$TMP/relay" RELAY_TOKEN="$TOKEN" RELAY_PORT="$PORT" \
-  node "$ROOT/server/src/index.js" >"$TMP/relay.log" 2>&1 &
+  node "$ROOT/apps/server/src/index.js" >"$TMP/relay.log" 2>&1 &
 RELAY_PID=$!
 
 for _ in $(seq 1 100); do
@@ -55,7 +55,10 @@ SID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["sessions
 DEVICE="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["deviceId"])' "$CONFIG")"
 
 echo "== show one session"
-"$BIN" show "$SID" --config "$CONFIG" | head -4
+# 不能直接 | head:set -o pipefail 下 head 提前关闭管道会让 show 收到 SIGPIPE(exit 141),
+# 会话内容变长后就会随机失败。先落盘再截取。
+"$BIN" show "$SID" --config "$CONFIG" >"$TMP/show.txt" 2>&1
+head -4 "$TMP/show.txt"
 
 echo "== live relay: host serves while client asks for the session"
 "$BIN" serve --config "$CONFIG" --push-every 9999 --poll-wait 20 >"$TMP/serve.log" 2>&1 &

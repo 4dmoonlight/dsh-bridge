@@ -45,7 +45,7 @@ git clone https://github.com/4dmoonlight/dsh-relay-sync.git
 cd dsh-relay-sync
 RELAY_TOKEN="$(node -e 'process.stdout.write(require("crypto").randomBytes(32).toString("base64url"))')" \
 RELAY_PORT=8787 RELAY_DATA_DIR=/var/lib/dsh-relay-sync \
-  nohup node server/src/index.js >/tmp/dsh-relay-sync.log 2>&1 &
+  nohup node apps/server/src/index.js >/tmp/dsh-relay-sync.log 2>&1 &
 echo "$RELAY_TOKEN"
 ```
 
@@ -68,7 +68,7 @@ On the Mac:
 ```bash
 # relay
 RELAY_TOKEN=secret RELAY_PORT=8787 RELAY_DATA_DIR=~/.dsh-relay-sync/relay-data \
-  node server/src/index.js
+  node apps/server/src/index.js
 
 # macOS app
 cd apps/macos && swift build -c release

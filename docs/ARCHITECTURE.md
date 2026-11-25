@@ -36,11 +36,11 @@ inbound port on the Mac.
 
 | Path | Responsibility |
 | --- | --- |
-| `server/src/app.js` | routing, auth, error mapping; one process, one data dir |
-| `server/src/store.js` | JSON store, atomic replace, revision counter, upsert/skip semantics |
-| `server/src/relay.js` | parked long-polls, command ids, timeouts, result correlation |
-| `server/src/events.js` | SSE subscribers and fan-out |
-| `server/src/model.js` | validation and normalization of pushed sessions |
+| `apps/server/src/app.js` | routing, auth, error mapping; one process, one data dir |
+| `apps/server/src/store.js` | JSON store, atomic replace, revision counter, upsert/skip semantics |
+| `apps/server/src/relay.js` | parked long-polls, command ids, timeouts, result correlation |
+| `apps/server/src/events.js` | SSE subscribers and fan-out |
+| `apps/server/src/model.js` | validation and normalization of pushed sessions |
 | `apps/macos/Sources/RelaySyncKit/DSHReader.swift` | DSH v4 JSONL adapter (`zstd -dc` when compressed) |
 | `apps/macos/Sources/RelaySyncKit/RelayClient.swift` | typed HTTP client |
 | `apps/macos/Sources/RelaySyncKit/SyncEngine.swift` | push loop, host loop, command handling |
