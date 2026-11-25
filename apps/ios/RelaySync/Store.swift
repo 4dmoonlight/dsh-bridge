@@ -19,7 +19,7 @@ final class Store: ObservableObject {
 
   private var sidebarTask: Task<Void, Never>?
   private var messagesTask: Task<Void, Never>?
-  private var heartbeatTask: Task<Void, Never>?
+
   private var lastSeq = 0
   private var seenIds = Set<String>()
 
@@ -74,14 +74,8 @@ final class Store: ObservableObject {
         try? await Task.sleep(nanoseconds: 5_000_000_000)
       }
     }
-    heartbeatTask?.cancel()
-    heartbeatTask = Task { [weak self] in
-      while !Task.isCancelled {
-        guard let self, let client = self.client else { return }
-        await client.heartbeat(deviceId: self.deviceId, deviceName: self.deviceName)
-        try? await Task.sleep(nanoseconds: 25_000_000_000)
-      }
-    }
+    // 不上报心跳:这是纯查看器,注册成设备只会在所有人的侧边栏里留下一个
+    // 0 会话的幽灵条目(而且重装一次就多一条)。
   }
 
   // MARK: - 配对
@@ -128,7 +122,7 @@ final class Store: ObservableObject {
   func unpair() {
     Keychain.remove("relay_url")
     Keychain.remove("relay_token")
-    sidebarTask?.cancel(); messagesTask?.cancel(); heartbeatTask?.cancel()
+    sidebarTask?.cancel(); messagesTask?.cancel()
     relayURL = nil
     token = nil
     devices = []

@@ -167,6 +167,7 @@ export function apply(ctx) {
       syncRelayScope()
       const files = listSessionFiles()
       const metas = []
+      const pendingBySession = []
 
       for (const file of files) {
         let mtime = 0
@@ -196,8 +197,22 @@ export function apply(ctx) {
 
         const pending = parsed.messages.filter((m) => m.seq > (prev.pushed || 0))
         if (!pending.length) continue
+        pendingBySession.push({ sid: parsed.session_id, pending })
+      }
+
+      // 顺序很重要:会话必须先存在,消息才能推。否则服务端的 404 session_not_found
+      // 会被当作永久错误丢弃,新库上的会话就永远是空的。
+      if (metas.length) {
+        try {
+          await client.syncSessions({ device_id: config.device_id, sessions: metas })
+        } catch (err) {
+          ctx.logger?.warn?.('cross-device: metadata sync failed: ' + (err && err.message))
+          return // 元数据没成功就不要推消息,下一轮再来
+        }
+      }
+
+      for (const { sid, pending } of pendingBySession) {
         const lastSeq = pending[pending.length - 1].seq
-        const sid = parsed.session_id
         enqueue('msg:' + sid, async () => {
           const result = await client.pushMessages(sid, {
             device_id: config.device_id,
@@ -217,11 +232,6 @@ export function apply(ctx) {
         })
       }
 
-      if (metas.length) {
-        enqueue('meta', async () => {
-          await client.syncSessions({ device_id: config.device_id, sessions: metas })
-        })
-      }
       writeJson(STATE_FILE, state)
     } catch (err) {
       ctx.logger?.warn?.('cross-device: scan failed: ' + (err && err.message))
