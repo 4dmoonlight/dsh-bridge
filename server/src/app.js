@@ -3,6 +3,9 @@ import { Store } from './store.js';
 import { EventHub } from './events.js';
 import { RelayHub } from './relay.js';
 import { summaryOf } from './model.js';
+import { openDatabase } from './db.js';
+import { WebSocketHub } from './ws.js';
+import { createApiV1 } from './api-v1.js';
 import { HttpError, PROTOCOL, nowIso, readJson, safeEqual, sendEmpty, sendJson } from './util.js';
 
 export const VERSION = '0.1.0';
@@ -14,6 +17,10 @@ export const VERSION = '0.1.0';
  *   logger?: {info: Function, error: Function},
  *   bodyLimitBytes?: number,
  *   commandTimeoutMs?: number,
+ *   db?: import('./db.js').RelayDb,
+ *   now?: () => Date | string | number,
+ *   wsPingIntervalMs?: number,
+ *   wsPongTimeoutMs?: number,
  * }} options
  */
 export async function createRelayApp(options) {
@@ -22,10 +29,29 @@ export async function createRelayApp(options) {
   const store = await new Store({ dataDir: options.dataDir }).load();
   const events = new EventHub();
   const relay = new RelayHub({ commandTimeoutMs: options.commandTimeoutMs ?? 10000 });
+  // The SQLite store and WebSocket hub are created here by default so tests and
+  // the CLI share one wiring path; index.js may pass its own db for startup
+  // logging. The hub owns only in-memory state.
+  const db = options.db ?? openDatabase({ dataDir: options.dataDir, now: options.now });
+  const ws = new WebSocketHub({
+    logger,
+    pingIntervalMs: options.wsPingIntervalMs,
+    pongTimeoutMs: options.wsPongTimeoutMs,
+  });
+  const api = createApiV1({ db, ws, instanceToken: options.instanceToken, bodyLimit });
   const startedAt = Date.now();
+  let closed = false;
 
   const server = createServer((req, res) => {
     handle(req, res).catch((error) => fail(res, error, logger));
+  });
+  server.on('upgrade', (req, socket, head) => {
+    try {
+      api.handleUpgrade(req, socket, head);
+    } catch (error) {
+      logger.error?.(error);
+      socket.destroy();
+    }
   });
 
   /** @param {import('node:http').IncomingMessage} req */
@@ -76,6 +102,11 @@ export async function createRelayApp(options) {
         'access-control-allow-headers': 'authorization, content-type',
         'access-control-allow-methods': 'GET, POST, PUT, DELETE, OPTIONS',
       });
+    }
+
+    if (path === '/api/v1' || path.startsWith('/api/v1/')) {
+      const handled = await api.handle(req, res, { url, path, method });
+      if (handled) return;
     }
 
     if (method === 'GET' && path === '/healthz') {
@@ -278,6 +309,8 @@ export async function createRelayApp(options) {
     store,
     events,
     relay,
+    db,
+    ws,
     version: VERSION,
     async listen(port = 8787, host = '127.0.0.1') {
       await new Promise((resolve, reject) => {
@@ -292,9 +325,15 @@ export async function createRelayApp(options) {
       return { port: actualPort, url: `http://${host}:${actualPort}` };
     },
     async close() {
+      if (closed) return;
+      closed = true;
       events.closeAll();
       relay.close();
+      // Close upgraded sockets first: server.close() waits for connections it
+      // knows about, but WebSocket tunnels are not tracked by the HTTP server.
+      ws.close();
       await new Promise((resolve) => server.close(() => resolve(undefined)));
+      db.close();
     },
   };
 }

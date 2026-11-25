@@ -4,6 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { createRelayApp } from './app.js';
+import { openDatabase } from './db.js';
 
 const args = parseArgs(process.argv.slice(2));
 const dataDir = resolve(args['data-dir'] ?? process.env.RELAY_DATA_DIR ?? join(homedir(), '.dsh-relay-sync'));
@@ -11,7 +12,11 @@ const host = args.host ?? process.env.RELAY_HOST ?? '127.0.0.1';
 const port = Number(args.port ?? process.env.RELAY_PORT ?? 8787);
 const token = await resolveToken(dataDir, process.env.RELAY_TOKEN ?? args.token);
 
-const app = await createRelayApp({ dataDir, instanceToken: token });
+// Open relay.sqlite before listening so a broken schema/database fails at
+// startup instead of on the first cross-device request. The app attaches the
+// /api/v1/ws 'upgrade' handler when it creates the HTTP server.
+const db = openDatabase({ dataDir });
+const app = await createRelayApp({ dataDir, instanceToken: token, db });
 const { port: actualPort, url } = await app.listen(port, host);
 
 console.log(
@@ -21,6 +26,7 @@ console.log(
     host,
     port: actualPort,
     dataDir,
+    database: db.file,
     protocol: app.version,
     tokenSource: process.env.RELAY_TOKEN || args.token ? 'env' : 'file',
   }),
