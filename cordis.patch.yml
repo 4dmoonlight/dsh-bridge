@@ -1,0 +1,4 @@
+# 把本插件挂进 profile 的层栈。没有这一行,包装了也不会被载入。
+- insert:
+    - id: dsh-cross-device
+      name: 'dsh-cross-device'
