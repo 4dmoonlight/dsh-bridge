@@ -1,0 +1,21 @@
+name: RelaySync
+options:
+  bundleIdPrefix: com.4dmoonlight
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+targets:
+  RelaySync:
+    type: application
+    platform: iOS
+    sources:
+      - path: RelaySync
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.4dmoonlight.relaysync
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_CFBundleDisplayName: RelaySync
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        CODE_SIGNING_ALLOWED: NO
