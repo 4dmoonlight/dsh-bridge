@@ -5,7 +5,7 @@ import {
   MESSAGE_TEXT_LIMIT,
   PLATFORMS,
 } from './db.js';
-import { HttpError, clipText, isIsoDate, readJson, safeEqual, sendJson } from './util.js';
+import { HttpError, PROTOCOL, clipText, isIsoDate, readJson, safeEqual, sendJson } from './util.js';
 import { WS_PATH, rejectUpgrade } from './ws.js';
 
 const MAX_ID_LENGTH = 200;
@@ -21,9 +21,25 @@ const MAX_ID_LENGTH = 200;
  *   bodyLimit?: number,
  * }} options
  */
+/** 配对码有效期:10 分钟。 */
+const PAIRING_TTL_MS = 10 * 60 * 1000;
+/** 认领接口限流:每分钟最多 12 次,防止暴力猜 6 位码。 */
+const CLAIM_LIMIT_PER_MINUTE = 12;
+
 export function createApiV1(options) {
   const { db, ws, instanceToken } = options;
   const bodyLimit = options.bodyLimit ?? 16 * 1024 * 1024;
+
+  // 滑动窗口限流:只记最近一分钟的认领尝试。
+  let claimAttempts = [];
+
+  function claimAllowed() {
+    const now = Date.now();
+    claimAttempts = claimAttempts.filter((t) => now - t < 60_000);
+    if (claimAttempts.length >= CLAIM_LIMIT_PER_MINUTE) return false;
+    claimAttempts.push(now);
+    return true;
+  }
 
   /** @param {import('node:http').IncomingMessage} req @param {URL} url */
   function tokenOf(req, url) {
@@ -57,9 +73,32 @@ export function createApiV1(options) {
     const { url, path, method } = route;
     if (path !== '/api/v1' && !path.startsWith('/api/v1/')) return false;
 
+    // 配对认领必须免鉴权:新设备此刻还没有任何凭据。配对码本身即一次性凭据。
+    if (method === 'POST' && path === '/api/v1/pairing/claim') {
+      const body = await readBody(req);
+      const code = requiredString(body.code, 'code', 16);
+      if (!/^[0-9]{6}$/.test(code)) {
+        throw new HttpError(400, 'invalid_code', 'pairing code must be 6 digits');
+      }
+      if (!claimAllowed()) {
+        throw new HttpError(429, 'rate_limited', 'too many pairing attempts, wait a minute');
+      }
+      if (!db.claimPairingCode(code)) {
+        throw new HttpError(404, 'pairing_code_invalid', 'code is wrong, used, or expired');
+      }
+      sendJson(res, 200, { protocol: PROTOCOL, token: instanceToken });
+      return true;
+    }
+
     // Authenticate before routing so unauthenticated probes cannot tell which
     // /api/v1 paths exist.
     requireToken(req);
+
+    if (method === 'POST' && path === '/api/v1/pairing/code') {
+      const payload = db.createPairingCode(PAIRING_TTL_MS);
+      sendJson(res, 200, { code: payload.code, expires_at: payload.expires_at, ttl_seconds: Math.floor(PAIRING_TTL_MS / 1000) });
+      return true;
+    }
 
     if (method === 'POST' && path === '/api/v1/devices/heartbeat') {
       const body = await readBody(req);

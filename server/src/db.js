@@ -1,4 +1,5 @@
 import { mkdirSync } from 'node:fs';
+import { randomInt } from 'node:crypto';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { HttpError, clipText } from './util.js';
@@ -39,6 +40,12 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 CREATE INDEX IF NOT EXISTS idx_messages_session_seq ON messages(session_id, seq);
 CREATE INDEX IF NOT EXISTS idx_sessions_device_updated ON sessions(device_id, updated_at DESC);
+CREATE TABLE IF NOT EXISTS pairing_codes (
+  code TEXT PRIMARY KEY,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  used_at TEXT
+);
 `;
 
 /**
@@ -148,6 +155,14 @@ export class RelayDb {
         INSERT OR IGNORE INTO messages (msg_id, session_id, device_id, role, content, created_at)
         VALUES (?, ?, ?, ?, ?, ?)
       `),
+      insertPairing: this.database.prepare(
+        'INSERT INTO pairing_codes (code, created_at, expires_at, used_at) VALUES (?, ?, ?, NULL)',
+      ),
+      getPairing: this.database.prepare('SELECT * FROM pairing_codes WHERE code = ?'),
+      consumePairing: this.database.prepare(
+        'UPDATE pairing_codes SET used_at = ? WHERE code = ? AND used_at IS NULL AND expires_at > ?',
+      ),
+      purgePairings: this.database.prepare('DELETE FROM pairing_codes WHERE expires_at <= ?'),
       latestMessageSeq: this.database.prepare(
         'SELECT COALESCE(MAX(seq), 0) AS latest FROM messages WHERE session_id = ?',
       ),
@@ -229,6 +244,39 @@ export class RelayDb {
   getSession(sessionId) {
     const row = this.statements.getSession.get(sessionId);
     return row ? publicSession(row) : null;
+  }
+
+  /**
+   * 生成一次性配对码。码本身即凭据:短时效、单次使用,由已认证设备发起。
+   * @param {number} ttlMs
+   * @returns {{ code: string, expires_at: string }}
+   */
+  createPairingCode(ttlMs) {
+    const now = Date.now();
+    const createdAt = new Date(now).toISOString();
+    const expiresAt = new Date(now + ttlMs).toISOString();
+    this.statements.purgePairings.run(createdAt);
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
+      try {
+        this.statements.insertPairing.run(code, createdAt, expiresAt);
+        return { code, expires_at: expiresAt };
+      } catch {
+        /* 撞码,重试 */
+      }
+    }
+    throw new HttpError(500, 'pairing_code_failed', 'could not allocate a pairing code');
+  }
+
+  /**
+   * 认领配对码。单次成功,过期或已用返回 null。
+   * @param {string} code
+   * @returns {boolean}
+   */
+  claimPairingCode(code) {
+    const nowIso = new Date().toISOString();
+    const result = this.statements.consumePairing.run(nowIso, code, nowIso);
+    return Number(result.changes) === 1;
   }
 
   /**
