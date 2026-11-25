@@ -2,7 +2,7 @@
 /**
  * 端到端验收:模拟两台设备,验证跨设备同步的三项验收标准。
  *
- *   node scripts/e2e-relay.mjs --relay http://127.0.0.1:8787 --token <token>
+ *   node scripts/e2e-hub.mjs --hub http://127.0.0.1:8787 --token <token>
  *
  * 覆盖:
  *   1. A 上报设备与会话后,B 的 sidebar 能看到 A 和该会话
@@ -16,7 +16,7 @@ function arg(name, fallback) {
   return i >= 0 && argv[i + 1] ? argv[i + 1] : fallback
 }
 
-const RELAY = arg('relay', 'http://127.0.0.1:8787').replace(/\/+$/, '')
+const HUB = arg('hub', 'http://127.0.0.1:8787').replace(/\/+$/, '')
 const TOKEN = arg('token', '')
 if (!TOKEN) {
   console.error('缺少 --token')
@@ -30,7 +30,7 @@ function check(name, ok, detail) {
 }
 
 async function call(method, path, body) {
-  const res = await fetch(RELAY + path, {
+  const res = await fetch(HUB + path, {
     method,
     headers: Object.assign(
       { authorization: 'Bearer ' + TOKEN },
@@ -51,7 +51,7 @@ const SID = 'sess-' + RUN
 const now = () => new Date().toISOString()
 
 async function main() {
-  console.log('relay:', RELAY)
+  console.log('hub:', HUB)
 
   console.log('\n[1] 两台设备心跳')
   const ha = await call('POST', '/api/v1/devices/heartbeat', { device_id: A, device_name: 'E2E-Mac-A', platform: 'macos' })
@@ -114,7 +114,7 @@ async function main() {
   check('seq 连续无跳号(重复不消耗序号)', contiguous, 'seqs=' + JSON.stringify(seqs))
 
   console.log('\n[8] 鉴权')
-  const noAuth = await fetch(RELAY + '/api/v1/sidebar')
+  const noAuth = await fetch(HUB + '/api/v1/sidebar')
   check('无 token 401', noAuth.status === 401, 'status=' + noAuth.status)
 
   console.log('\n' + (failures === 0 ? 'E2E OK' : 'E2E FAILED (' + failures + ')'))

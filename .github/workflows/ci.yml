@@ -13,7 +13,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - name: relay tests
+      - name: hub tests
         working-directory: apps/server
         run: npm test
 

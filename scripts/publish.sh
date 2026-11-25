@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Publish dsh-relay-sync to GitHub once credentials exist.
+# Publish dsh-bridge to GitHub once credentials exist.
 #
 #   gh auth login            # or: export GITHUB_TOKEN=...
 #   bash scripts/publish.sh [OWNER] [--private]
@@ -11,7 +11,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-NAME="dsh-relay-sync"
+NAME="dsh-bridge"
 OWNER=""
 VISIBILITY="public"
 
@@ -68,7 +68,7 @@ fi
 if ! gh repo view "$OWNER/$NAME" >/dev/null 2>&1; then
   gh repo create "$OWNER/$NAME" "--$VISIBILITY" \
     --source=. --remote=origin \
-    --description "Relay-mediated session sync for DeepSeek Harness on macOS"
+    --description "Hub-mediated session sync for DeepSeek Harness on macOS"
 fi
 
 if git remote get-url origin >/dev/null 2>&1; then

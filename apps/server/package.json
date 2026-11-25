@@ -1,9 +1,9 @@
 {
-  "name": "@dsh-relay-sync/server",
+  "name": "@dsh-bridge/server",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Zero-dependency relay server for dsh-relay-sync",
+  "description": "Zero-dependency hub server for dsh-bridge",
   "engines": {
     "node": ">=22.5"
   },

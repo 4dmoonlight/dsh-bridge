@@ -3,7 +3,7 @@ import Foundation
 import FoundationNetworking
 #endif
 
-public struct RelayError: Error, CustomStringConvertible, Sendable {
+public struct HubError: Error, CustomStringConvertible, Sendable {
     public var status: Int
     public var code: String
     public var message: String
@@ -14,10 +14,10 @@ public struct RelayError: Error, CustomStringConvertible, Sendable {
         self.message = message
     }
 
-    public var description: String { "relay error \(status) \(code): \(message)" }
+    public var description: String { "hub error \(status) \(code): \(message)" }
 }
 
-public final class RelayClient: @unchecked Sendable {
+public final class HubClient: @unchecked Sendable {
     public let baseURL: URL
     private let token: String
     private let session: URLSession
@@ -48,7 +48,7 @@ public final class RelayClient: @unchecked Sendable {
         )
     }
 
-    public func sync(sessions: [RelaySession], full: Bool = false, deleted: [String] = []) async throws -> SyncResponse {
+    public func sync(sessions: [HubSession], full: Bool = false, deleted: [String] = []) async throws -> SyncResponse {
         try await request(
             method: "POST",
             path: "/v1/sessions/sync",
@@ -63,7 +63,7 @@ public final class RelayClient: @unchecked Sendable {
         return try await request(method: "GET", path: "/v1/sessions", query: items)
     }
 
-    public func session(id: String) async throws -> RelaySession {
+    public func session(id: String) async throws -> HubSession {
         let response: SessionResponse = try await request(method: "GET", path: "/v1/sessions/" + escaped(id))
         return response.session
     }
@@ -74,17 +74,17 @@ public final class RelayClient: @unchecked Sendable {
         return envelope.devices
     }
 
-    /// Ask the relay to fetch a session from an online host; can fall back to the stored copy.
-    public func relayFetch(sessionId: String, deviceId: String, fallbackStored: Bool = true) async throws -> RelayFetchResponse {
+    /// Ask the hub to fetch a session from an online host; can fall back to the stored copy.
+    public func hubFetch(sessionId: String, deviceId: String, fallbackStored: Bool = true) async throws -> HubFetchResponse {
         struct Body: Encodable { var deviceId: String; var fallback: String?; var timeoutMs: Int }
         return try await request(
             method: "POST",
-            path: "/v1/relay/sessions/" + escaped(sessionId) + "/fetch",
+            path: "/v1/hub/sessions/" + escaped(sessionId) + "/fetch",
             body: Body(deviceId: deviceId, fallback: fallbackStored ? "stored" : nil, timeoutMs: 5000)
         )
     }
 
-    /// Park one host command poll. Returns nil when the relay has nothing within waitSeconds.
+    /// Park one host command poll. Returns nil when the hub has nothing within waitSeconds.
     public func pollHostCommand(waitSeconds: Int = 20) async throws -> HostCommand? {
         var request = makeRequest(
             method: "GET",
@@ -98,7 +98,7 @@ public final class RelayClient: @unchecked Sendable {
         return try decoder.decode(HostCommandEnvelope.self, from: data).command
     }
 
-    public func reportHostResult(commandId: String, session: RelaySession?) async throws {
+    public func reportHostResult(commandId: String, session: HubSession?) async throws {
         let envelope = HostResultEnvelope(
             ok: session != nil,
             result: session.map { SessionFetchResult(session: $0) },
@@ -122,7 +122,7 @@ public final class RelayClient: @unchecked Sendable {
         do {
             return try decoder.decode(Response.self, from: data)
         } catch {
-            throw RelayError(status: 0, code: "decode_failed", message: String(describing: error))
+            throw HubError(status: 0, code: "decode_failed", message: String(describing: error))
         }
     }
 
@@ -135,7 +135,7 @@ public final class RelayClient: @unchecked Sendable {
         do {
             return try decoder.decode(Response.self, from: data)
         } catch {
-            throw RelayError(status: 0, code: "decode_failed", message: String(describing: error))
+            throw HubError(status: 0, code: "decode_failed", message: String(describing: error))
         }
     }
 
@@ -163,19 +163,19 @@ public final class RelayClient: @unchecked Sendable {
         request.httpMethod = method
         request.setValue("Bearer " + token, forHTTPHeaderField: "authorization")
         request.setValue("application/json", forHTTPHeaderField: "accept")
-        request.setValue("relay-sync-macos/" + RelayProtocol.version, forHTTPHeaderField: "user-agent")
+        request.setValue("dsh-bridge-macos/" + HubProtocol.version, forHTTPHeaderField: "user-agent")
         return request
     }
 
     private func validate(_ response: URLResponse, data: Data) throws {
         guard let http = response as? HTTPURLResponse else {
-            throw RelayError(status: 0, code: "no_response", message: "not an HTTP response")
+            throw HubError(status: 0, code: "no_response", message: "not an HTTP response")
         }
         guard (200..<300).contains(http.statusCode) else {
             if let envelope = try? decoder.decode(ErrorEnvelope.self, from: data) {
-                throw RelayError(status: http.statusCode, code: envelope.error.code, message: envelope.error.message ?? "")
+                throw HubError(status: http.statusCode, code: envelope.error.code, message: envelope.error.message ?? "")
             }
-            throw RelayError(status: http.statusCode, code: "http_error", message: "HTTP " + String(http.statusCode))
+            throw HubError(status: http.statusCode, code: "http_error", message: "HTTP " + String(http.statusCode))
         }
     }
 

@@ -1,10 +1,10 @@
 import Foundation
 
-public enum RelayProtocol {
-    public static let version = "relay/1"
+public enum HubProtocol {
+    public static let version = "bridge/1"
 }
 
-public struct RelayMessage: Codable, Hashable, Sendable {
+public struct HubMessage: Codable, Hashable, Sendable {
     public var role: String
     public var text: String
     public var createdAt: String?
@@ -16,14 +16,14 @@ public struct RelayMessage: Codable, Hashable, Sendable {
     }
 }
 
-public struct RelaySession: Codable, Identifiable, Hashable, Sendable {
+public struct HubSession: Codable, Identifiable, Hashable, Sendable {
     public var id: String
     public var title: String
     public var workspace: String
     public var engine: String
     public var createdAt: String
     public var updatedAt: String
-    public var messages: [RelayMessage]
+    public var messages: [HubMessage]
     public var deviceId: String?
 
     public init(
@@ -33,7 +33,7 @@ public struct RelaySession: Codable, Identifiable, Hashable, Sendable {
         engine: String = "dsh",
         createdAt: String,
         updatedAt: String,
-        messages: [RelayMessage],
+        messages: [HubMessage],
         deviceId: String? = nil
     ) {
         self.id = id
@@ -46,8 +46,8 @@ public struct RelaySession: Codable, Identifiable, Hashable, Sendable {
         self.deviceId = deviceId
     }
 
-    /// Keep the relay payload bounded: the last maxMessages messages, each clipped.
-    public func trimmed(maxMessages: Int = 200, maxText: Int = 8000) -> RelaySession {
+    /// Keep the hub payload bounded: the last maxMessages messages, each clipped.
+    public func trimmed(maxMessages: Int = 200, maxText: Int = 8000) -> HubSession {
         var copy = self
         copy.messages = messages.suffix(maxMessages).map { message in
             var trimmed = message
@@ -97,9 +97,9 @@ public struct RegisterResponse: Codable, Sendable {
 }
 
 public struct SyncRequest: Codable, Sendable {
-    public var protocolVersion: String = RelayProtocol.version
+    public var protocolVersion: String = HubProtocol.version
     public var full: Bool
-    public var sessions: [RelaySession]
+    public var sessions: [HubSession]
     public var deleted: [String]
 
     enum CodingKeys: String, CodingKey {
@@ -123,12 +123,12 @@ public struct SessionListResponse: Codable, Sendable {
 }
 
 public struct SessionResponse: Codable, Sendable {
-    public var session: RelaySession
+    public var session: HubSession
 }
 
-public struct RelayFetchResponse: Codable, Sendable {
+public struct HubFetchResponse: Codable, Sendable {
     public var source: String
-    public var session: RelaySession?
+    public var session: HubSession?
 }
 
 public struct HostCommand: Codable, Sendable {
@@ -145,7 +145,7 @@ public struct HostCommandEnvelope: Codable, Sendable {
 }
 
 public struct SessionFetchResult: Codable, Sendable {
-    public var session: RelaySession
+    public var session: HubSession
 }
 
 public struct HostResultEnvelope: Codable, Sendable {

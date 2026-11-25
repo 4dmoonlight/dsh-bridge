@@ -196,7 +196,7 @@ export class WebSocketHub {
    */
   accept(req, socket, head, options) {
     if (this.closed) {
-      rejectUpgrade(socket, 503, 'server_closed', 'relay is shutting down');
+      rejectUpgrade(socket, 503, 'server_closed', 'hub is shutting down');
       return false;
     }
     if ((req.method ?? 'GET').toUpperCase() !== 'GET') {
@@ -472,7 +472,7 @@ class WebSocketConnection {
     timer.unref?.();
   }
 
-  /** Abrupt teardown, used on relay shutdown. */
+  /** Abrupt teardown, used on hub shutdown. */
   terminate(code = 1001, reason = '') {
     if (!this.closeSent) this.sendRaw(encodeFrame(OPCODE.close, closePayload(code, reason)));
     this.closeSent = true;

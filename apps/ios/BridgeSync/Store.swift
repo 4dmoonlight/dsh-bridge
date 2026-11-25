@@ -4,7 +4,7 @@ import SwiftUI
 /// 全局状态:配对信息、设备与会话列表、当前打开的会话消息。
 @MainActor
 final class Store: ObservableObject {
-  @Published private(set) var relayURL: URL?
+  @Published private(set) var hubURL: URL?
   @Published private(set) var token: String?
   @Published var devices: [DeviceGroup] = []
   @Published var sidebarError: String?
@@ -23,11 +23,11 @@ final class Store: ObservableObject {
   private var lastSeq = 0
   private var seenIds = Set<String>()
 
-  var isPaired: Bool { relayURL != nil && (token?.isEmpty == false) }
+  var isPaired: Bool { hubURL != nil && (token?.isEmpty == false) }
 
-  private var client: RelayClient? {
-    guard let relayURL, let token else { return nil }
-    return RelayClient(relayURL: relayURL, token: token)
+  private var client: HubClient? {
+    guard let hubURL, let token else { return nil }
+    return HubClient(hubURL: hubURL, token: token)
   }
 
   private var deviceId: String {
@@ -51,17 +51,17 @@ final class Store: ObservableObject {
     // 自动化验证用:从启动参数直接配对,免去模拟器里手工输入。
     // 只在 Debug 构建存在,不会进入发布包。
     let args = ProcessInfo.processInfo.arguments
-    if let relayIndex = args.firstIndex(of: "-relayURL"), relayIndex + 1 < args.count,
+    if let hubIndex = args.firstIndex(of: "-hubURL"), hubIndex + 1 < args.count,
        let codeIndex = args.firstIndex(of: "-pairCode"), codeIndex + 1 < args.count {
-      let relay = args[relayIndex + 1]
+      let hub = args[hubIndex + 1]
       let code = args[codeIndex + 1]
-      Task { await pair(relayText: relay, code: code) }
+      Task { await pair(hubText: hub, code: code) }
       return
     }
     #endif
-    guard let urlString = Keychain.get("relay_url"), let url = URL(string: urlString),
-          let saved = Keychain.get("relay_token"), !saved.isEmpty else { return }
-    relayURL = url
+    guard let urlString = Keychain.get("hub_url"), let url = URL(string: urlString),
+          let saved = Keychain.get("hub_token"), !saved.isEmpty else { return }
+    hubURL = url
     token = saved
     startLoops()
   }
@@ -80,9 +80,9 @@ final class Store: ObservableObject {
 
   // MARK: - 配对
 
-  func pair(relayText: String, code: String) async {
+  func pair(hubText: String, code: String) async {
     pairingError = nil
-    let trimmed = relayText.trimmingCharacters(in: .whitespacesAndNewlines)
+    let trimmed = hubText.trimmingCharacters(in: .whitespacesAndNewlines)
     guard let url = URL(string: trimmed), let scheme = url.scheme,
           scheme == "https" || scheme == "http" else {
       pairingError = "中继地址需要以 http:// 或 https:// 开头"
@@ -95,10 +95,10 @@ final class Store: ObservableObject {
     isPairing = true
     defer { isPairing = false }
     do {
-      let claim = try await RelayClient.claim(relayURL: url, code: code)
-      Keychain.set(trimmed, for: "relay_url")
-      Keychain.set(claim.token, for: "relay_token")
-      relayURL = url
+      let claim = try await HubClient.claim(hubURL: url, code: code)
+      Keychain.set(trimmed, for: "hub_url")
+      Keychain.set(claim.token, for: "hub_token")
+      hubURL = url
       token = claim.token
       startLoops()
       await refreshSidebar()
@@ -120,10 +120,10 @@ final class Store: ObservableObject {
   }
 
   func unpair() {
-    Keychain.remove("relay_url")
-    Keychain.remove("relay_token")
+    Keychain.remove("hub_url")
+    Keychain.remove("hub_token")
     sidebarTask?.cancel(); messagesTask?.cancel()
-    relayURL = nil
+    hubURL = nil
     token = nil
     devices = []
     selectedSession = nil

@@ -1,15 +1,15 @@
 import { HttpError, nowIso, randomId } from './util.js';
 
 /**
- * Online host command relay.
+ * Online host command hub.
  *
  * A host keeps one long-poll open (GET /v1/host/commands). When a client asks the
- * relay to run a command on that host, the relay hands it to the parked poll and
+ * hub to run a command on that host, the hub hands it to the parked poll and
  * resolves the HTTP request when the host posts the result. This is the same
  * "forward live when online, fall back to the stored copy when offline" split the
  * reference projects use, without a websocket dependency.
  */
-export class RelayHub {
+export class HubHub {
   /** @param {{commandTimeoutMs?: number, onlineWindowMs?: number}} [options] */
   constructor(options = {}) {
     this.commandTimeoutMs = options.commandTimeoutMs ?? 10000;

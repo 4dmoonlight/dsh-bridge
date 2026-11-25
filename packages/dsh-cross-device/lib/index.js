@@ -3,7 +3,7 @@
  *
  * 设计原则:
  * - 网络请求全部异步,失败进重试队列;区分「暂时性错误(重试)」与「永久性错误(丢弃)」
- * - 水位随 relay 地址隔离:换 relay 后重新全量推送,否则新库永远是空的
+ * - 水位随 hub 地址隔离:换 hub 后重新全量推送,否则新库永远是空的
  * - 按文件 mtime 增量扫描:未变化的会话不再解压解析,避免每轮全量阻塞事件循环
  * - 卸载时清理定时器、路由和退避等待,不留残留
  */
@@ -13,7 +13,7 @@ import { join } from 'node:path'
 import { homedir, hostname } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import { scanAllSessions, listSessionFiles, parseSessionFile } from './scan.js'
-import { createRelayClient } from './relay-client.js'
+import { createHubClient } from './hub-client.js'
 
 export const name = 'dsh-cross-device'
 export const inject = ['webServer']
@@ -51,10 +51,23 @@ function writeJson(file, value) {
 
 function loadConfig() {
   const cfg = readJson(CONFIG_FILE, null)
-  if (cfg && cfg.device_id) return cfg
+  if (cfg && cfg.device_id) {
+    // 兼容改名前的配置:project 从 dsh-relay-sync 改名为 dsh-bridge 时,
+    // 配置键从 relay_url/relay_token 变成 hub_url/hub_token。老配置直接迁移,
+    // 用户不用重新配对。
+    let migrated = false
+    if (!cfg.hub_url && cfg.relay_url) { cfg.hub_url = cfg.relay_url; migrated = true }
+    if (!cfg.hub_token && cfg.relay_token) { cfg.hub_token = cfg.relay_token; migrated = true }
+    if (migrated) {
+      delete cfg.relay_url
+      delete cfg.relay_token
+      writeJson(CONFIG_FILE, cfg)
+    }
+    return cfg
+  }
   const fresh = {
-    relay_url: '',
-    relay_token: '',
+    hub_url: '',
+    hub_token: '',
     device_id: randomUUID(),
     device_name: hostname(),
     enabled: false,
@@ -67,6 +80,12 @@ function loadState() {
   const s = readJson(STATE_FILE, null) || {}
   if (!s.sessions || typeof s.sessions !== 'object') s.sessions = {}
   if (!s.files || typeof s.files !== 'object') s.files = {}
+  // 同一个改名兼容:老状态里的 relay_url 就是现在的 hub_url。
+  // 少了这行会让水位被判定为"换了中继",触发一次全量重推。
+  if (!s.hub_url && s.relay_url) {
+    s.hub_url = s.relay_url
+    delete s.relay_url
+  }
   return s
 }
 
@@ -75,7 +94,7 @@ export function apply(ctx) {
   let config = loadConfig()
   const state = loadState()
 
-  const client = createRelayClient({ getConfig: () => config })
+  const client = createHubClient({ getConfig: () => config })
 
   let stopped = false
   let queued = []
@@ -84,7 +103,7 @@ export function apply(ctx) {
   let backoff = 1000
 
   function configured() {
-    return Boolean(config.enabled && config.relay_url && config.relay_token)
+    return Boolean(config.enabled && config.hub_url && config.hub_token)
   }
 
   /** 队列条目:{ fn, tries, key }。同 key 只保留最新一个,避免断网期间无限堆积。 */
@@ -119,7 +138,7 @@ export function apply(ctx) {
           entry.tries += 1
           const status = err && err.status
           const permanent = PERMANENT_STATUS.has(status) || entry.tries >= MAX_TRIES
-          ctx.logger?.warn?.('cross-device: relay call failed ' + (status || '') + ' try ' + entry.tries + ': ' + (err && err.message))
+          ctx.logger?.warn?.('cross-device: hub call failed ' + (status || '') + ' try ' + entry.tries + ': ' + (err && err.message))
           // 永久性错误或超过重试上限:丢弃这一条,避免队头永久阻塞后续同步
           if (permanent) {
             queued = queued.filter((e) => e !== entry)
@@ -148,10 +167,10 @@ export function apply(ctx) {
     }
   }
 
-  /** 换 relay 就必须重推:水位按 relay 地址隔离。 */
-  function syncRelayScope() {
-    if (state.relay_url !== config.relay_url) {
-      state.relay_url = config.relay_url
+  /** 换 hub 就必须重推:水位按 hub 地址隔离。 */
+  function syncHubScope() {
+    if (state.hub_url !== config.hub_url) {
+      state.hub_url = config.hub_url
       state.sessions = {}
       state.files = {}
       writeJson(STATE_FILE, state)
@@ -164,7 +183,7 @@ export function apply(ctx) {
     if (stopped || scanning || !configured()) return
     scanning = true
     try {
-      syncRelayScope()
+      syncHubScope()
       const files = listSessionFiles()
       const metas = []
       const pendingBySession = []
@@ -254,7 +273,7 @@ export function apply(ctx) {
    * 本机接口防护。宿主不提供逐路由鉴权,所以自己做两层:
    * 1) 只接受同源请求(挡掉恶意网页发起的 CSRF);
    * 2) 写操作必须带 x-cross-device 头(跨源需预检,浏览器不会自动带上)。
-   * 本机其它进程仍可访问,真正的兜底是「换 relay 必须重输 token」。
+   * 本机其它进程仍可访问,真正的兜底是「换 hub 必须重输 token」。
    */
   function guard(req, res) {
     const origin = req.headers.origin
@@ -291,28 +310,28 @@ export function apply(ctx) {
         if (!guard(req, res)) return
         if (req.method === 'GET') {
           json(res, 200, {
-            relay_url: config.relay_url,
+            hub_url: config.hub_url,
             device_id: config.device_id,
             device_name: config.device_name,
             enabled: config.enabled,
-            token_configured: Boolean(config.relay_token),
+            token_configured: Boolean(config.hub_token),
           })
           return
         }
         if (req.method === 'POST') {
           try {
             const body = await readBody(req)
-            const nextRelay = typeof body.relay_url === 'string' ? body.relay_url.trim() : config.relay_url
-            if (nextRelay && !/^https?:\/\//.test(nextRelay)) {
-              json(res, 400, { error: { code: 'invalid_relay_url' } })
+            const nextHub = typeof body.hub_url === 'string' ? body.hub_url.trim() : config.hub_url
+            if (nextHub && !/^https?:\/\//.test(nextHub)) {
+              json(res, 400, { error: { code: 'invalid_hub_url' } })
               return
             }
-            if (nextRelay && nextRelay !== config.relay_url && !body.relay_token) {
-              json(res, 400, { error: { code: 'token_required_on_relay_change' } })
+            if (nextHub && nextHub !== config.hub_url && !body.hub_token) {
+              json(res, 400, { error: { code: 'token_required_on_hub_change' } })
               return
             }
-            if (typeof body.relay_url === 'string') config.relay_url = nextRelay
-            if (typeof body.relay_token === 'string' && body.relay_token) config.relay_token = body.relay_token.trim()
+            if (typeof body.hub_url === 'string') config.hub_url = nextHub
+            if (typeof body.hub_token === 'string' && body.hub_token) config.hub_token = body.hub_token.trim()
             if (typeof body.device_name === 'string' && body.device_name) config.device_name = body.device_name.trim()
             if (typeof body.enabled === 'boolean') config.enabled = body.enabled
             writeJson(CONFIG_FILE, config)
@@ -347,7 +366,7 @@ export function apply(ctx) {
           const out = await client.request('POST', '/api/v1/pairing/code', {})
           json(res, 200, out)
         } catch (err) {
-          json(res, 502, { error: { code: err.message || 'relay_error' } })
+          json(res, 502, { error: { code: err.message || 'hub_error' } })
         }
       },
     }),
@@ -366,10 +385,10 @@ export function apply(ctx) {
         }
         try {
           const body = await readBody(req)
-          const relayUrl = typeof body.relay_url === 'string' ? body.relay_url.trim().replace(/\/+$/, '') : ''
+          const hubUrl = typeof body.hub_url === 'string' ? body.hub_url.trim().replace(/\/+$/, '') : ''
           const code = typeof body.code === 'string' ? body.code.trim() : ''
-          if (!/^https?:\/\//.test(relayUrl)) {
-            json(res, 400, { error: { code: 'invalid_relay_url' } })
+          if (!/^https?:\/\//.test(hubUrl)) {
+            json(res, 400, { error: { code: 'invalid_hub_url' } })
             return
           }
           if (!/^[0-9]{6}$/.test(code)) {
@@ -377,7 +396,7 @@ export function apply(ctx) {
             return
           }
           // 认领接口本身免鉴权:此刻本机还没有任何凭据。
-          const resp = await fetch(relayUrl + '/api/v1/pairing/claim', {
+          const resp = await fetch(hubUrl + '/api/v1/pairing/claim', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ code }),
@@ -390,11 +409,11 @@ export function apply(ctx) {
             })
             return
           }
-          config.relay_url = relayUrl
-          config.relay_token = payload.token
+          config.hub_url = hubUrl
+          config.hub_token = payload.token
           config.enabled = true
           writeJson(CONFIG_FILE, config)
-          syncRelayScope()
+          syncHubScope()
           void beat()
           void scanAndPush()
           json(res, 200, { ok: true, device_id: config.device_id, device_name: config.device_name })
@@ -418,7 +437,7 @@ export function apply(ctx) {
         try {
           json(res, 200, await client.sidebar())
         } catch (err) {
-          json(res, err.status === 401 ? 401 : 502, { error: { code: err.message || 'relay_error' } })
+          json(res, err.status === 401 ? 401 : 502, { error: { code: err.message || 'hub_error' } })
         }
       },
     }),
@@ -445,7 +464,7 @@ export function apply(ctx) {
           }
           json(res, 200, await client.messages(sessionId, sinceSeq, limit))
         } catch (err) {
-          json(res, 502, { error: { code: err.message || 'relay_error' } })
+          json(res, 502, { error: { code: err.message || 'hub_error' } })
         }
       },
     }),

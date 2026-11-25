@@ -1,5 +1,5 @@
 {
-  "protocol": "relay/1",
+  "protocol": "bridge/1",
   "full": false,
   "sessions": [
     {

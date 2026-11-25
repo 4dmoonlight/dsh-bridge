@@ -1,31 +1,31 @@
 import XCTest
-@testable import RelaySyncKit
+@testable import BridgeSyncKit
 
-final class RelaySyncKitTests: XCTestCase {
+final class BridgeSyncKitTests: XCTestCase {
     func testSyncRequestUsesProtocolKey() throws {
         let request = SyncRequest(
             full: true,
             sessions: [
-                RelaySession(
+                HubSession(
                     id: "s1",
                     title: "t",
                     workspace: "/tmp",
                     createdAt: "2026-01-01T00:00:00.000Z",
                     updatedAt: "2026-01-01T00:00:00.000Z",
-                    messages: [RelayMessage(role: "user", text: "hi")]
+                    messages: [HubMessage(role: "user", text: "hi")]
                 )
             ],
             deleted: []
         )
         let data = try JSONEncoder().encode(request)
         let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        XCTAssertEqual(object?["protocol"] as? String, "relay/1")
+        XCTAssertEqual(object?["protocol"] as? String, "bridge/1")
         XCTAssertEqual(object?["full"] as? Bool, true)
     }
 
     func testTrimmedKeepsTheTailAndClipsText() {
-        let messages = (0..<10).map { RelayMessage(role: "user", text: String(repeating: "x", count: 20) + "\($0)") }
-        let session = RelaySession(
+        let messages = (0..<10).map { HubMessage(role: "user", text: String(repeating: "x", count: 20) + "\($0)") }
+        let session = HubSession(
             id: "s1",
             title: "t",
             workspace: "/tmp",
@@ -44,7 +44,7 @@ final class RelaySyncKitTests: XCTestCase {
         let store = ConfigStore(path: directory.appendingPathComponent("macos.json"))
         XCTAssertNil(try store.load())
         let config = MacConfig(
-            relayURL: "http://127.0.0.1:8787",
+            hubURL: "http://127.0.0.1:8787",
             instanceToken: "secret",
             deviceName: "mac",
             deviceId: "dev_1",
@@ -52,7 +52,7 @@ final class RelaySyncKitTests: XCTestCase {
         )
         try store.save(config)
         let loaded = try XCTUnwrap(try store.load())
-        XCTAssertEqual(loaded.relayURL, config.relayURL)
+        XCTAssertEqual(loaded.hubURL, config.hubURL)
         XCTAssertEqual(loaded.deviceToken, "dev_1.secret")
         XCTAssertEqual(loaded.tokenForSync, "dev_1.secret")
         let attributes = try FileManager.default.attributesOfItem(atPath: store.path.path)
@@ -67,7 +67,7 @@ final class RelaySyncKitTests: XCTestCase {
         let file = sessionDir.appendingPathComponent("session.v4.jsonl")
         let lines = [
             #"{"type":"session","version":4,"id":"session-abc","createdAt":1767225600000,"cwd":"/Users/me/Dev","origin":"user"}"#,
-            #"{"type":"session/title","time":1767225601000,"data":{"title":"Fix the relay"}}"#,
+            #"{"type":"session/title","time":1767225601000,"data":{"title":"Fix the hub"}}"#,
             #"{"type":"user/message","seq":1,"time":1767225602000,"data":{"content":[{"type":"text","text":"please sync sessions"}],"source":{"kind":"user"}}}"#,
             #"{"type":"user/message","seq":2,"time":1767225602500,"data":{"content":[{"type":"text","text":"injected context"}],"source":{"kind":"system-reminder"}}}"#,
             #"{"type":"assistant/message","seq":3,"time":1767225603000,"data":{"turn":1,"step":1,"message":{"role":"assistant","content":[{"type":"reasoning","text":"think"},{"type":"text","text":"on it"}]}}}"#,
@@ -78,7 +78,7 @@ final class RelaySyncKitTests: XCTestCase {
         let reader = DSHReader(root: root)
         let session = try reader.readSession(id: "session-abc")
         XCTAssertEqual(session.id, "session-abc")
-        XCTAssertEqual(session.title, "Fix the relay")
+        XCTAssertEqual(session.title, "Fix the hub")
         XCTAssertEqual(session.workspace, "/Users/me/Dev")
         XCTAssertEqual(session.messages.map(\.role), ["user", "assistant"])
         XCTAssertEqual(session.messages[0].text, "please sync sessions")

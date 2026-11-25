@@ -55,7 +55,7 @@ fi
 echo
 echo "完成。重启 DSH 后:"
 echo "  1. 刷新页面,侧边栏出现 ⇄ 图标"
-echo "  2. 打开插件配置,填 relay_url 与 relay_token"
+echo "  2. 打开插件配置,填 hub_url 与 hub_token"
 echo
 echo "回滚:"
 echo "  rm -rf $DEST"

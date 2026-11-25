@@ -1,6 +1,6 @@
 import Foundation
 
-/// 与 relay 的 /api/v1 契约保持一致(字段名沿用服务端的 snake_case)。
+/// 与 hub 的 /api/v1 契约保持一致(字段名沿用服务端的 snake_case)。
 
 struct SidebarResponse: Codable {
   let devices: [DeviceGroup]

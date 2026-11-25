@@ -1,21 +1,21 @@
-name: RelaySync
+name: BridgeSync
 options:
   bundleIdPrefix: com.4dmoonlight
   deploymentTarget:
     iOS: "17.0"
   createIntermediateGroups: true
 targets:
-  RelaySync:
+  BridgeSync:
     type: application
     platform: iOS
     sources:
-      - path: RelaySync
+      - path: BridgeSync
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.4dmoonlight.relaysync
+        PRODUCT_BUNDLE_IDENTIFIER: com.4dmoonlight.hubsync
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
-        INFOPLIST_KEY_CFBundleDisplayName: RelaySync
+        INFOPLIST_KEY_CFBundleDisplayName: BridgeSync
         SWIFT_VERSION: "5.0"
         TARGETED_DEVICE_FAMILY: "1,2"
         # 真机安装必须签名。用 Xcode 已为该 bundle id 建好的团队描述文件。

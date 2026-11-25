@@ -1,18 +1,18 @@
 import AppKit
 import Foundation
 import Dispatch
-import RelaySyncKit
+import BridgeSyncKit
 
-// relay-sync — macOS side of dsh-relay-sync.
+// dsh-bridge — macOS side of dsh-bridge.
 
 // Commands:
-//   register  pair this Mac with a relay (saves a device token)
-//   push      read local DSH sessions and push them to the relay
+//   register  pair this Mac with a hub (saves a device token)
+//   push      read local DSH sessions and push them to the hub
 //   serve     host mode: keep a command poll parked and re-push periodically
-//   list      list sessions stored on the relay
+//   list      list sessions stored on the hub
 //   show      print one synced session
 //   config    show the local config location and values (tokens masked)
-//   doctor    check local prerequisites (sessions dir, zstd, relay health)
+//   doctor    check local prerequisites (sessions dir, zstd, hub health)
 //   ui        open the SwiftUI window
 
 struct Options {
@@ -64,35 +64,35 @@ func expand(_ path: String) -> String {
 
 func printUsage() {
     print("""
-    relay-sync — session sync for DeepSeek Harness (macOS)
+    dsh-bridge — session sync for DeepSeek Harness (macOS)
 
     USAGE
-      relay-sync <command> [options]
+      dsh-bridge <command> [options]
 
     COMMANDS
-      register   --relay URL --token TOKEN [--name NAME]   pair this Mac with a relay
+      register   --hub URL --token TOKEN [--name NAME]   pair this Mac with a hub
       push       [--limit N] [--full] [--json]             push local DSH sessions
-      serve      [--push-every 30] [--poll-wait 20]        host mode (relay live commands)
-      list       [--limit N] [--query Q] [--json]          list sessions on the relay
+      serve      [--push-every 30] [--poll-wait 20]        host mode (hub live commands)
+      list       [--limit N] [--query Q] [--json]          list sessions on the hub
       show       <session-id> [--json]                     print one synced session
       config     [--json]                                  show local config
       doctor     [--json]                                  check prerequisites
       ui                                                   open the macOS window
 
     OPTIONS
-      --config PATH        config file (default ~/.dsh-relay-sync/macos.json)
+      --config PATH        config file (default ~/.dsh-bridge/macos.json)
       --sessions-dir PATH  DSH sessions root (default ~/.dsh/sessions)
-      --relay URL          relay base URL (overrides config)
+      --hub URL          hub base URL (overrides config)
       --token TOKEN        instance token (overrides config)
       --json               machine-readable output
 
     ENV
-      RELAY_URL, RELAY_TOKEN   same as --relay / --token
+      HUB_URL, BRIDGE_TOKEN   same as --hub / --token
     """)
 }
 
 func fail(_ message: String, code: Int32 = 1) -> Never {
-    FileHandle.standardError.write(("[relay-sync] " + message + "\n").data(using: .utf8)!)
+    FileHandle.standardError.write(("[dsh-bridge] " + message + "\n").data(using: .utf8)!)
     exit(code)
 }
 
@@ -103,9 +103,9 @@ func makeStore(_ options: Options) -> ConfigStore {
 func loadConfigOrFail(_ options: Options, store: ConfigStore) -> MacConfig {
     let maybe = (try? store.load()) ?? nil
     guard var config = maybe else {
-        fail("no config at " + store.path.path + " — run: relay-sync register --relay URL --token TOKEN")
+        fail("no config at " + store.path.path + " — run: dsh-bridge register --hub URL --token TOKEN")
     }
-    if let relay = options.value("relay") { config.relayURL = relay }
+    if let hub = options.value("hub") { config.hubURL = hub }
     if let token = options.value("token") { config.instanceToken = token }
     return config
 }
@@ -132,22 +132,22 @@ case "help":
     printUsage()
 
 case "register":
-    guard let relayURL = options.value("relay") ?? environment["RELAY_URL"] else {
-        fail("--relay URL is required (or set RELAY_URL)")
+    guard let hubURL = options.value("hub") ?? environment["HUB_URL"] else {
+        fail("--hub URL is required (or set HUB_URL)")
     }
-    guard let instanceToken = options.value("token") ?? environment["RELAY_TOKEN"] else {
-        fail("--token is required (or set RELAY_TOKEN)")
+    guard let instanceToken = options.value("token") ?? environment["BRIDGE_TOKEN"] else {
+        fail("--token is required (or set BRIDGE_TOKEN)")
     }
     let deviceName = options.value("name") ?? Host.current().localizedName ?? ProcessInfo.processInfo.hostName
-    guard let url = URL(string: relayURL) else { fail("invalid relay URL: " + relayURL) }
-    let client = RelayClient(baseURL: url, token: instanceToken)
+    guard let url = URL(string: hubURL) else { fail("invalid hub URL: " + hubURL) }
+    let client = HubClient(baseURL: url, token: instanceToken)
     do {
         let response = try await client.register(
             name: deviceName,
             platform: "macos",
             hostname: ProcessInfo.processInfo.hostName
         )
-        var config = MacConfig(relayURL: relayURL, instanceToken: instanceToken, deviceName: deviceName)
+        var config = MacConfig(hubURL: hubURL, instanceToken: instanceToken, deviceName: deviceName)
         config.deviceId = response.device.id
         config.deviceToken = response.token
         try store.save(config)
@@ -185,9 +185,9 @@ case "serve":
     let source = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
     source.setEventHandler { print("stopping host loop"); exit(0) }
     source.resume()
-    print("host mode: relay " + config.relayURL + ", device " + (config.deviceId ?? "unregistered"))
+    print("host mode: hub " + config.hubURL + ", device " + (config.deviceId ?? "unregistered"))
     await engine.serveHost(pushEverySeconds: pushEvery, pollWaitSeconds: pollWait) { line in
-        print("[relay-sync] " + line)
+        print("[dsh-bridge] " + line)
     }
 
 case "list":
@@ -199,7 +199,7 @@ case "list":
         if options.flag("json") {
             print(String(data: try encoder.encode(response), encoding: .utf8) ?? "{}")
         } else if response.sessions.isEmpty {
-            print("no sessions on the relay yet")
+            print("no sessions on the hub yet")
         } else {
             for item in response.sessions {
                 print(item.updatedAt + "  " + item.id + "  [" + String(item.messageCount) + " msgs]  " + item.title)
@@ -211,7 +211,7 @@ case "list":
     }
 
 case "show":
-    guard let sessionId = options.positionals.first else { fail("usage: relay-sync show <session-id>") }
+    guard let sessionId = options.positionals.first else { fail("usage: dsh-bridge show <session-id>") }
     let config = loadConfigOrFail(options, store: store)
     let client = try store.client(for: config)
     do {
@@ -236,7 +236,7 @@ case "config":
             print(String(data: try encoder.encode(loaded), encoding: .utf8) ?? "{}")
         } else {
             print("path: " + store.path.path)
-            print("relay: " + loaded.relayURL)
+            print("hub: " + loaded.hubURL)
             print("device: " + (loaded.deviceId ?? "-") + "  name: " + loaded.deviceName)
             print("device token: " + mask(loaded.deviceToken))
             print("instance token: " + mask(loaded.instanceToken))
@@ -259,9 +259,9 @@ case "doctor":
         do {
             let client = try store.client(for: config)
             let health = try await client.health()
-            checks.append(check("relay", (health["ok"] as? Bool) == true, config.relayURL))
+            checks.append(check("hub", (health["ok"] as? Bool) == true, config.hubURL))
         } catch {
-            checks.append(check("relay", false, String(describing: error)))
+            checks.append(check("hub", false, String(describing: error)))
         }
     }
     if options.flag("json") {
@@ -279,7 +279,7 @@ case "ui":
     runUI(configStore: store, sessionsRoot: options.value("sessions-dir"))
 
 default:
-    fail("unknown command: " + options.command + "\n\nrun: relay-sync help")
+    fail("unknown command: " + options.command + "\n\nrun: dsh-bridge help")
 }
 
 func mask(_ value: String?) -> String {

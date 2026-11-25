@@ -1,24 +1,24 @@
 #!/usr/bin/env bash
-# Deploy the dsh-relay-sync relay onto a Linux server (systemd).
+# Deploy the dsh-bridge hub onto a Linux server (systemd).
 #
-#   sudo bash scripts/deploy-server.sh --domain relay.example.com
+#   sudo bash scripts/deploy-server.sh --domain hub.example.com
 #   sudo bash scripts/deploy-server.sh --port 8787 --no-caddy
 #   sudo bash scripts/deploy-server.sh --print-only      # show the plan, change nothing
 #
 # The script is idempotent: re-running updates the code and restarts the service.
-# The instance token is generated once and kept in /etc/dsh-relay-sync/env (0600).
+# The instance token is generated once and kept in /etc/dsh-bridge/env (0600).
 set -euo pipefail
 
-PORT="${RELAY_PORT:-8787}"
+PORT="${BRIDGE_PORT:-8787}"
 DOMAIN=""
-REPO_URL="${RELAY_REPO_URL:-https://github.com/4dmoonlight/dsh-relay-sync.git}"
+REPO_URL="${BRIDGE_REPO_URL:-https://github.com/4dmoonlight/dsh-bridge.git}"
 GITHUB_TOKEN="${GITHUB_TOKEN:-}"
-INSTALL_DIR="${RELAY_INSTALL_DIR:-/opt/dsh-relay-sync}"
-DATA_DIR="${RELAY_DATA_DIR:-/var/lib/dsh-relay-sync}"
-ENV_DIR="/etc/dsh-relay-sync"
+INSTALL_DIR="${BRIDGE_INSTALL_DIR:-/opt/dsh-bridge}"
+DATA_DIR="${BRIDGE_DATA_DIR:-/var/lib/dsh-bridge}"
+ENV_DIR="/etc/dsh-bridge"
 ENV_FILE="$ENV_DIR/env"
-SERVICE="dsh-relay-sync"
-SERVICE_USER="relay"
+SERVICE="dsh-bridge"
+SERVICE_USER="hub"
 CADDY=1
 PRINT_ONLY=0
 
@@ -138,34 +138,34 @@ step "instance token"
 # (last one wins in systemd, so a changed --port silently did nothing).
 prev_token=""
 if [ -f "$ENV_FILE" ]; then
-  prev_token="$(sed -n 's/^RELAY_TOKEN=//p' "$ENV_FILE" | head -1)"
+  prev_token="$(sed -n 's/^BRIDGE_TOKEN=//p' "$ENV_FILE" | head -1)"
 fi
 if [ -n "$prev_token" ]; then
   token="$prev_token"
   log "reusing token in $ENV_FILE"
-elif [ -n "${RELAY_TOKEN:-}" ]; then
-  token="$RELAY_TOKEN"
-  log "wrote token from RELAY_TOKEN"
+elif [ -n "${BRIDGE_TOKEN:-}" ]; then
+  token="$BRIDGE_TOKEN"
+  log "wrote token from BRIDGE_TOKEN"
 else
   token="$("$NODE_BIN" -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("base64url"))')"
   log "generated a new token in $ENV_FILE"
 fi
 umask 077
 {
-  printf 'RELAY_TOKEN=%s\n' "$token"
-  printf 'RELAY_PORT=%s\n' "$PORT"
-  printf 'RELAY_HOST=127.0.0.1\n'
-  printf 'RELAY_DATA_DIR=%s\n' "$DATA_DIR"
+  printf 'BRIDGE_TOKEN=%s\n' "$token"
+  printf 'BRIDGE_PORT=%s\n' "$PORT"
+  printf 'BRIDGE_HOST=127.0.0.1\n'
+  printf 'BRIDGE_DATA_DIR=%s\n' "$DATA_DIR"
 } >"$ENV_FILE"
 unset token prev_token
 chmod 0640 "$ENV_FILE"
 chown root:"$SERVICE_USER" "$ENV_FILE"
-TOKEN="$(sed -n 's/^RELAY_TOKEN=//p' "$ENV_FILE")"
+TOKEN="$(sed -n 's/^BRIDGE_TOKEN=//p' "$ENV_FILE")"
 
 step "systemd unit"
 cat >"/etc/systemd/system/$SERVICE.service" <<EOF
 [Unit]
-Description=dsh-relay-sync relay
+Description=dsh-bridge hub
 After=network-online.target
 Wants=network-online.target
 
@@ -201,7 +201,7 @@ if [ "$ok" = "1" ]; then
   log "local healthz ok on 127.0.0.1:$PORT"
 else
   journalctl -u "$SERVICE" -n 30 --no-pager || true
-  die "relay did not become healthy"
+  die "hub did not become healthy"
 fi
 
 if [ "$CADDY" = "1" ] && [ -n "$DOMAIN" ]; then
@@ -230,16 +230,16 @@ public="http://127.0.0.1:$PORT"
 [ -n "$DOMAIN" ] && public="https://$DOMAIN"
 cat <<EOF
 
-  relay URL:  $public
+  hub URL:  $public
   token:      $TOKEN
   env file:   $ENV_FILE (0600)
-  data:       $DATA_DIR (relay-store.json, plaintext sessions)
+  data:       $DATA_DIR (hub-store.json, plaintext sessions)
   service:    systemctl status $SERVICE
 
   Next, on the Mac:
 
-    git clone $REPO_URL && cd dsh-relay-sync
-    ./install.sh mac --relay $public --token $TOKEN --yes
+    git clone $REPO_URL && cd dsh-bridge
+    ./install.sh mac --hub $public --token $TOKEN --yes
 
   Treat the token as a password. It can read every stored session.
 EOF

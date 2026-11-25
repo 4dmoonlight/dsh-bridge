@@ -1,7 +1,7 @@
 import Foundation
 
 public struct MacConfig: Codable, Sendable {
-    public var relayURL: String
+    public var hubURL: String
     public var instanceToken: String
     public var deviceName: String
     public var deviceId: String?
@@ -9,14 +9,14 @@ public struct MacConfig: Codable, Sendable {
     public var lastSyncAt: String?
 
     public init(
-        relayURL: String,
+        hubURL: String,
         instanceToken: String,
         deviceName: String,
         deviceId: String? = nil,
         deviceToken: String? = nil,
         lastSyncAt: String? = nil
     ) {
-        self.relayURL = relayURL
+        self.hubURL = hubURL
         self.instanceToken = instanceToken
         self.deviceName = deviceName
         self.deviceId = deviceId
@@ -32,7 +32,7 @@ public struct ConfigStore {
 
     public init(path: URL? = nil) {
         self.path = path ?? FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".dsh-relay-sync")
+            .appendingPathComponent(".dsh-bridge")
             .appendingPathComponent("macos.json")
     }
 
@@ -56,10 +56,10 @@ public struct ConfigStore {
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path.path)
     }
 
-    public func client(for config: MacConfig, timeout: TimeInterval = 30) throws -> RelayClient {
-        guard let url = URL(string: config.relayURL), url.scheme != nil else {
-            throw RelayError(status: 0, code: "bad_relay_url", message: "invalid relay URL: " + config.relayURL)
+    public func client(for config: MacConfig, timeout: TimeInterval = 30) throws -> HubClient {
+        guard let url = URL(string: config.hubURL), url.scheme != nil else {
+            throw HubError(status: 0, code: "bad_hub_url", message: "invalid hub URL: " + config.hubURL)
         }
-        return RelayClient(baseURL: url, token: config.tokenForSync, timeout: timeout)
+        return HubClient(baseURL: url, token: config.tokenForSync, timeout: timeout)
     }
 }

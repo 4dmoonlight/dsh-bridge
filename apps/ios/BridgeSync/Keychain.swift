@@ -3,7 +3,7 @@ import Security
 
 /// token 等同密码,放 Keychain 而不是 UserDefaults。
 enum Keychain {
-  private static let service = "com.4dmoonlight.relaysync"
+  private static let service = "com.4dmoonlight.hubsync"
 
   static func set(_ value: String, for key: String) {
     let data = Data(value.utf8)

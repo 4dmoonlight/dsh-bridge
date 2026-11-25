@@ -1,6 +1,6 @@
-# Relay protocol (`relay/1`)
+# Hub protocol (`bridge/1`)
 
-The Mac app and the relay speak one small HTTP protocol. There is no websocket:
+The Mac app and the hub speak one small HTTP protocol. There is no websocket:
 the host keeps an outbound long-poll open, so the Mac never needs an inbound port,
 a public IP, or a TLS certificate.
 
@@ -14,11 +14,11 @@ The SSE endpoint also accepts `?token=` because `EventSource` cannot set headers
 
 | Token | How you get it | What it can do |
 | --- | --- | --- |
-| instance token | `RELAY_TOKEN`, or generated into `<dataDir>/instance-token` on first start | register devices, list/read/delete sessions, call the relay, read SSE |
+| instance token | `BRIDGE_TOKEN`, or generated into `<dataDir>/instance-token` on first start | register devices, list/read/delete sessions, call the hub, read SSE |
 | device token | `POST /v1/devices/register` | push sessions, keep a host poll open, report results |
 
 Registering the same `name` again rotates the token and invalidates the old one.
-This is a single-tenant relay: every valid token can read every stored session.
+This is a single-tenant hub: every valid token can read every stored session.
 See [SECURITY.md](SECURITY.md) before exposing it.
 
 ## Session shape
@@ -26,7 +26,7 @@ See [SECURITY.md](SECURITY.md) before exposing it.
 ```jsonc
 {
   "id": "session-abc",            // required, <= 200 chars
-  "title": "Fix the relay",
+  "title": "Fix the hub",
   "workspace": "/Users/me/Dev",
   "engine": "dsh",
   "createdAt": "2026-11-20T09:00:00.000Z",
@@ -39,14 +39,14 @@ See [SECURITY.md](SECURITY.md) before exposing it.
 
 Server limits: 2000 messages per session, 20 000 characters per message,
 300 characters per title, 500 per workspace, 16 MiB per request body.
-Clients should trim before pushing: `relay-sync` keeps the last 200 messages and
+Clients should trim before pushing: `dsh-bridge` keeps the last 200 messages and
 8 000 characters per message.
 
 ## Endpoints
 
 ### `GET /healthz` (no auth)
 ```json
-{ "ok": true, "protocol": "relay/1", "version": "0.1.0", "serverTime": "…", "uptimeSec": 12, "devices": 1, "sessions": 3 }
+{ "ok": true, "protocol": "bridge/1", "version": "0.1.0", "serverTime": "…", "uptimeSec": 12, "devices": 1, "sessions": 3 }
 ```
 
 `HEAD /healthz` is answered like `GET` with an empty body, so `curl -I` works.
@@ -56,18 +56,18 @@ Capabilities, so clients can degrade instead of guessing.
 
 ### `POST /v1/devices/register` (instance token)
 Request: `{ "name": "mac-mini", "platform": "macos", "hostname": "…", "capabilities": {} }`
-Response `201`: `{ "protocol": "relay/1", "device": { … }, "token": "dev_x.y", "rotated": false }`
+Response `201`: `{ "protocol": "bridge/1", "device": { … }, "token": "dev_x.y", "rotated": false }`
 
 ### `GET /v1/devices` (instance token)
 `{ "devices": [ { "id", "name", "platform", "hostname", "createdAt", "lastSeenAt", "online" } ] }`
-`online` is advisory: it means the relay saw this device within 60 s.
+`online` is advisory: it means the hub saw this device within 60 s.
 
 ### `PUT /v1/devices/self` (device token)
 Optional heartbeat / capability update. `204`.
 
 ### `POST /v1/sessions/sync` (device token)
 ```json
-{ "protocol": "relay/1", "full": false, "sessions": [ … ], "deleted": ["session-id"] }
+{ "protocol": "bridge/1", "full": false, "sessions": [ … ], "deleted": ["session-id"] }
 ```
 Response:
 ```json
@@ -94,7 +94,7 @@ Events: `ready`, `session.updated` (summary + deviceId), `session.deleted`,
 `device.updated`. A comment ping is written every 15 s.
 
 ### `GET /v1/host/commands?wait=25` (device token)
-The host parks this request. The relay answers `200 { "command": { "id", "method", "params", "createdAt" } }`
+The host parks this request. The hub answers `200 { "command": { "id", "method", "params", "createdAt" } }`
 when it has work, or `204` when `wait` seconds elapse. `wait` is clamped to 0–55 s.
 Only the newest poll for a device receives commands; a new poll cancels the old one.
 
@@ -102,16 +102,16 @@ Only the newest poll for a device receives commands; a new poll cancels the old 
 `{ "ok": true, "result": { "session": { … } } }` or
 `{ "ok": false, "error": { "code": "session_not_found", "message": "…" } }`. `204`.
 
-### `POST /v1/relay/sessions/{id}/fetch` (instance token)
+### `POST /v1/hub/sessions/{id}/fetch` (instance token)
 ```json
 { "deviceId": "dev_x", "fallback": "stored", "timeoutMs": 5000 }
 ```
-- host has a parked poll → relays `session.fetch` and returns
+- host has a parked poll → hubs `session.fetch` and returns
   `200 { "source": "live", "session": { … } }`;
 - host is offline → `409 host_offline`, unless `fallback: "stored"` was sent, in which case
   the stored copy comes back as `{ "source": "stored", … }`;
 - host does not answer in time → `504 host_timeout`, or the stored copy when
-  `fallback: "stored"` was sent. A proxy in front of the relay (a Cloudflare
+  `fallback: "stored"` was sent. A proxy in front of the hub (a Cloudflare
   tunnel, for instance) cannot report that the host's socket died, so a dead host
   keeps its poll parked until the wait runs out; without this rule the caller would
   see a timeout where an offline host would have produced the stored copy;
@@ -137,7 +137,7 @@ Only the newest poll for a device receives commands; a new poll cancels the old 
 
 ## Versioning
 
-The string `relay/1` is sent in `/healthz`, `/v1/meta`, register and sync.
-A relay that does not understand a request's `protocol` answers
+The string `bridge/1` is sent in `/healthz`, `/v1/meta`, register and sync.
+A hub that does not understand a request's `protocol` answers
 `400 protocol_mismatch` rather than guessing. Adding optional fields is not a
 breaking change; removing or renaming one is.

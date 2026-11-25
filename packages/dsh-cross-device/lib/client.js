@@ -45,7 +45,7 @@ window.__ModuleLoader__.load({
       // 配对相关状态
       const [pairCode, setPairCode] = useState('')
       const [pairErr, setPairErr] = useState('')
-      const [relayIn, setRelayIn] = useState('')
+      const [hubIn, setHubIn] = useState('')
       const [codeIn, setCodeIn] = useState('')
       const [busy, setBusy] = useState(false)
       const loadSidebarRef = useRef(null)
@@ -74,7 +74,7 @@ window.__ModuleLoader__.load({
         setBusy(true)
         setPairErr('')
         try {
-          await postJson('/api/cross-device/pairing/claim', { relay_url: relayIn.trim(), code: codeIn.trim() })
+          await postJson('/api/cross-device/pairing/claim', { hub_url: hubIn.trim(), code: codeIn.trim() })
           setCodeIn('')
           await loadSidebarRef.current()
         } catch (e) {
@@ -82,7 +82,7 @@ window.__ModuleLoader__.load({
         } finally {
           setBusy(false)
         }
-      }, [relayIn, codeIn])
+      }, [hubIn, codeIn])
       const [openSession, setOpenSession] = useState(null)
       const [messages, setMessages] = useState([])
       const lastSeqRef = useRef(0)
@@ -135,7 +135,7 @@ window.__ModuleLoader__.load({
       }, [loadMessages])
 
       // 实时更新走 3 秒增量轮询,**不使用浏览器直连 WebSocket**。
-      // 原因:浏览器无法在 WS 握手时携带 Authorization 头,只能把 relay token 放进
+      // 原因:浏览器无法在 WS 握手时携带 Authorization 头,只能把 hub token 放进
       // URL,那等于把凭据暴露给前端。轮询经由本机代理转发,token 始终留在 Node 进程里。
       // 同时只保留一个定时器,并在停止后丢弃回调,避免切换会话时泄漏。
       useEffect(() => {
@@ -183,9 +183,9 @@ window.__ModuleLoader__.load({
               h('div', { style: S.meta }, '输入中继地址和旧设备上的配对码'),
               h('input', {
                 style: S.input,
-                placeholder: 'https://relay.example.com',
-                value: relayIn,
-                onChange: (e) => setRelayIn(e.target.value),
+                placeholder: 'https://hub.example.com',
+                value: hubIn,
+                onChange: (e) => setHubIn(e.target.value),
               }),
               h('input', {
                 style: S.input,
@@ -196,7 +196,7 @@ window.__ModuleLoader__.load({
               }),
               h('button', {
                 style: S.btn,
-                disabled: busy || !relayIn || codeIn.length !== 6,
+                disabled: busy || !hubIn || codeIn.length !== 6,
                 onClick: () => void claimPairingCode(),
               }, busy ? '连接中…' : '配对'),
               pairErr ? h('div', { style: Object.assign({}, S.meta, { color: '#ef4444' }) }, pairErr) : null,

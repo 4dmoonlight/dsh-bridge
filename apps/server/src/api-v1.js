@@ -15,7 +15,7 @@ const MAX_ID_LENGTH = 200;
  * /v1 routes keep their original behaviour and share the same instance token.
  *
  * @param {{
- *   db: import('./db.js').RelayDb,
+ *   db: import('./db.js').HubDb,
  *   ws: import('./ws.js').WebSocketHub,
  *   instanceToken: string,
  *   bodyLimit?: number,
@@ -245,7 +245,7 @@ export function createApiV1(options) {
   function handleUpgrade(req, socket, head) {
     let url;
     try {
-      url = new URL(req.url ?? '/', 'http://relay.local');
+      url = new URL(req.url ?? '/', 'http://hub.local');
     } catch {
       rejectUpgrade(socket, 400, 'invalid_request');
       return true;

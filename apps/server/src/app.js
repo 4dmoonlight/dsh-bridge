@@ -1,7 +1,7 @@
 import { createServer } from 'node:http';
 import { Store } from './store.js';
 import { EventHub } from './events.js';
-import { RelayHub } from './relay.js';
+import { HubHub } from './hub.js';
 import { summaryOf } from './model.js';
 import { openDatabase } from './db.js';
 import { WebSocketHub } from './ws.js';
@@ -17,18 +17,18 @@ export const VERSION = '0.1.0';
  *   logger?: {info: Function, error: Function},
  *   bodyLimitBytes?: number,
  *   commandTimeoutMs?: number,
- *   db?: import('./db.js').RelayDb,
+ *   db?: import('./db.js').HubDb,
  *   now?: () => Date | string | number,
  *   wsPingIntervalMs?: number,
  *   wsPongTimeoutMs?: number,
  * }} options
  */
-export async function createRelayApp(options) {
+export async function createHubApp(options) {
   const bodyLimit = options.bodyLimitBytes ?? 16 * 1024 * 1024;
   const logger = options.logger ?? console;
   const store = await new Store({ dataDir: options.dataDir }).load();
   const events = new EventHub();
-  const relay = new RelayHub({ commandTimeoutMs: options.commandTimeoutMs ?? 10000 });
+  const hub = new HubHub({ commandTimeoutMs: options.commandTimeoutMs ?? 10000 });
   // The SQLite store and WebSocket hub are created here by default so tests and
   // the CLI share one wiring path; index.js may pass its own db for startup
   // logging. The hub owns only in-memory state.
@@ -58,7 +58,7 @@ export async function createRelayApp(options) {
   function tokenOf(req) {
     const header = req.headers.authorization;
     if (typeof header === 'string' && header.startsWith('Bearer ')) return header.slice(7).trim();
-    const url = new URL(req.url ?? '/', 'http://relay.local');
+    const url = new URL(req.url ?? '/', 'http://hub.local');
     return url.searchParams.get('token') ?? '';
   }
 
@@ -89,7 +89,7 @@ export async function createRelayApp(options) {
 
   /** @param {import('node:http').IncomingMessage} req @param {import('node:http').ServerResponse} res */
   async function handle(req, res) {
-    const url = new URL(req.url ?? '/', 'http://relay.local');
+    const url = new URL(req.url ?? '/', 'http://hub.local');
     const path = url.pathname.replace(/\/+$/, '') || '/';
     // HTTP requires HEAD to behave like GET without a body. Node already marks the
     // response bodyless for HEAD requests, so mapping the method is enough — and it
@@ -130,7 +130,7 @@ export async function createRelayApp(options) {
           fullSync: true,
           sse: true,
           hostCommands: true,
-          relayFallback: 'stored',
+          hubFallback: 'stored',
         },
       });
     }
@@ -145,7 +145,7 @@ export async function createRelayApp(options) {
 
     if (method === 'GET' && path === '/v1/devices') {
       requireInstance(req);
-      const devices = store.listDevices().map((device) => ({ ...device, online: relay.isOnline(device.id) }));
+      const devices = store.listDevices().map((device) => ({ ...device, online: hub.isOnline(device.id) }));
       return sendJson(res, 200, { devices });
     }
 
@@ -155,7 +155,7 @@ export async function createRelayApp(options) {
       if (body && typeof body === 'object' && body.capabilities && typeof body.capabilities === 'object') {
         device.capabilities = body.capabilities;
       }
-      relay.markSeen(device.id);
+      hub.markSeen(device.id);
       store.touchDevice(device.id);
       return sendEmpty(res, 204);
     }
@@ -241,7 +241,7 @@ export async function createRelayApp(options) {
       res.on('close', onClose);
       let result;
       try {
-        result = await relay.park(device.id, waitSeconds * 1000, withdrawn.signal);
+        result = await hub.park(device.id, waitSeconds * 1000, withdrawn.signal);
       } finally {
         res.off('close', onClose);
       }
@@ -256,7 +256,7 @@ export async function createRelayApp(options) {
       if (!body || typeof body !== 'object' || typeof body.ok !== 'boolean') {
         throw new HttpError(400, 'invalid_body', 'ok boolean required');
       }
-      relay.complete(decodeURIComponent(commandResultMatch[1]), device.id, {
+      hub.complete(decodeURIComponent(commandResultMatch[1]), device.id, {
         ok: body.ok,
         result: body.result,
         error: body.error,
@@ -264,25 +264,25 @@ export async function createRelayApp(options) {
       return sendEmpty(res, 204);
     }
 
-    const relayMatch = /^\/v1\/relay\/sessions\/([^/]+)(\/fetch)?$/.exec(path);
-    if (relayMatch && method === 'POST') {
+    const hubMatch = /^\/v1\/hub\/sessions\/([^/]+)(\/fetch)?$/.exec(path);
+    if (hubMatch && method === 'POST') {
       requireInstance(req);
-      const sessionId = decodeURIComponent(relayMatch[1]);
+      const sessionId = decodeURIComponent(hubMatch[1]);
       const body = (await readJson(req, bodyLimit).catch(() => null)) ?? {};
       const deviceId = typeof body.deviceId === 'string' ? body.deviceId : '';
       if (!deviceId) throw new HttpError(400, 'device_id_required');
       const stored = store.getSession(sessionId);
 
-      if (!relay.hasPoll(deviceId)) {
+      if (!hub.hasPoll(deviceId)) {
         if (stored && body.fallback === 'stored') return sendJson(res, 200, { source: 'stored', session: stored });
         throw new HttpError(409, 'host_offline', `device ${deviceId} is not connected`);
       }
       const timeoutMs = clampInt(body.timeoutMs, 8000, 500, 30000);
       let payload;
       try {
-        payload = await relay.dispatch(deviceId, 'session.fetch', { sessionId }, timeoutMs);
+        payload = await hub.dispatch(deviceId, 'session.fetch', { sessionId }, timeoutMs);
       } catch (error) {
-        // Behind a proxy (a Cloudflare tunnel, say) the relay never sees the host's
+        // Behind a proxy (a Cloudflare tunnel, say) the hub never sees the host's
         // socket close, so a dead host keeps its parked poll until the wait elapses.
         // For a caller that asked for the stored copy, a host that does not answer is
         // as good as an offline one — better than surfacing a timeout.
@@ -308,7 +308,7 @@ export async function createRelayApp(options) {
     server,
     store,
     events,
-    relay,
+    hub,
     db,
     ws,
     version: VERSION,
@@ -328,7 +328,7 @@ export async function createRelayApp(options) {
       if (closed) return;
       closed = true;
       events.closeAll();
-      relay.close();
+      hub.close();
       // Close upgraded sockets first: server.close() waits for connections it
       // knows about, but WebSocket tunnels are not tracked by the HTTP server.
       ws.close();

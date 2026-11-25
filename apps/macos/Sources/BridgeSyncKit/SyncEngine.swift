@@ -7,14 +7,14 @@ public struct SyncReport: Sendable {
     public var scanned: Int
 }
 
-/// Drives the two halves of the relay protocol from the Mac:
-/// host mode pushes local DSH sessions and answers live relay commands;
+/// Drives the two halves of the hub protocol from the Mac:
+/// host mode pushes local DSH sessions and answers live hub commands;
 /// client mode reads sessions other devices pushed.
 public final class SyncEngine: @unchecked Sendable {
     public let reader: DSHReader
-    public let client: RelayClient
+    public let client: HubClient
 
-    public init(reader: DSHReader, client: RelayClient) {
+    public init(reader: DSHReader, client: HubClient) {
         self.reader = reader
         self.client = client
     }
@@ -50,7 +50,7 @@ public final class SyncEngine: @unchecked Sendable {
                 }
                 let command = try await client.pollHostCommand(waitSeconds: pollWaitSeconds)
                 guard let command else { continue }
-                onLog("relay command " + command.method + " (" + command.id + ")")
+                onLog("hub command " + command.method + " (" + command.id + ")")
                 if command.method == "session.fetch", let sessionId = command.params?.sessionId {
                     let session = try? reader.readSession(id: sessionId)
                     try await client.reportHostResult(commandId: command.id, session: session?.trimmed())

@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct RelaySyncApp: App {
+struct BridgeSyncApp: App {
   @StateObject private var store = Store()
 
   var body: some Scene {

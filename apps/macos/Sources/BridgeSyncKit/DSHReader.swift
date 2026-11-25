@@ -21,7 +21,7 @@ public enum DSHReaderError: Error, CustomStringConvertible {
 }
 
 /// Reads DeepSeek Harness session files (v4 JSONL, optionally zstd-compressed)
-/// and maps them onto the relay session model.
+/// and maps them onto the hub session model.
 ///
 /// The on-disk format is owned by DSH and may change; this adapter is best-effort
 /// and only consumes: the session header, session/title, user/message (text parts
@@ -75,8 +75,8 @@ public struct DSHReader {
         return files.sorted { $0.modified > $1.modified }
     }
 
-    public func readRecent(limit: Int = 50) throws -> [RelaySession] {
-        var result: [RelaySession] = []
+    public func readRecent(limit: Int = 50) throws -> [HubSession] {
+        var result: [HubSession] = []
         for file in try sessionFiles().prefix(limit) {
             if let session = try? read(file.url) {
                 result.append(session)
@@ -85,7 +85,7 @@ public struct DSHReader {
         return result
     }
 
-    public func readSession(id: String) throws -> RelaySession {
+    public func readSession(id: String) throws -> HubSession {
         let files = try sessionFiles()
         if let match = files.first(where: { $0.sessionId == id }) {
             return try read(match.url)
@@ -101,7 +101,7 @@ public struct DSHReader {
 
     // MARK: - Parsing
 
-    public func read(_ url: URL) throws -> RelaySession {
+    public func read(_ url: URL) throws -> HubSession {
         let data = try load(url)
         guard let text = String(data: data, encoding: .utf8) else {
             throw DSHReaderError.unreadable("not UTF-8: " + url.lastPathComponent)
@@ -109,7 +109,7 @@ public struct DSHReader {
 
         var header: [String: Any]?
         var title: String?
-        var messages: [RelayMessage] = []
+        var messages: [HubMessage] = []
         var lastEventMillis: Double?
 
         for rawLine in text.split(separator: "\n", omittingEmptySubsequences: true) {
@@ -132,13 +132,13 @@ public struct DSHReader {
                 if let kind, kind != "user" { continue }
                 let text = extractText(payload?["content"])
                 if !text.isEmpty {
-                    messages.append(RelayMessage(role: "user", text: text, createdAt: isoString(lastEventMillis)))
+                    messages.append(HubMessage(role: "user", text: text, createdAt: isoString(lastEventMillis)))
                 }
             case "assistant/message":
                 let message = payload?["message"] as? [String: Any]
                 let text = extractText(message?["content"], allowed: ["text"])
                 if !text.isEmpty {
-                    messages.append(RelayMessage(role: "assistant", text: text, createdAt: isoString(lastEventMillis)))
+                    messages.append(HubMessage(role: "assistant", text: text, createdAt: isoString(lastEventMillis)))
                 }
             default:
                 continue
@@ -154,7 +154,7 @@ public struct DSHReader {
         let updatedAt = isoString(lastEventMillis) ?? createdAt
         let resolvedTitle = title ?? fallbackTitle(messages: messages, id: id)
 
-        return RelaySession(
+        return HubSession(
             id: id,
             title: resolvedTitle,
             workspace: cwd,
@@ -204,7 +204,7 @@ public struct DSHReader {
         return chunks.joined(separator: "\n\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private func fallbackTitle(messages: [RelayMessage], id: String) -> String {
+    private func fallbackTitle(messages: [HubMessage], id: String) -> String {
         if let first = messages.first(where: { $0.role == "user" }), !first.text.isEmpty {
             let line = first.text.split(separator: "\n").first.map(String.init) ?? first.text
             return String(line.prefix(80))
@@ -215,16 +215,16 @@ public struct DSHReader {
     private func isoString(_ millis: Double?) -> String? {
         guard let millis else { return nil }
         let date = Date(timeIntervalSince1970: millis / 1000)
-        return ISO8601DateFormatter.relay.string(from: date)
+        return ISO8601DateFormatter.hub.string(from: date)
     }
 
     private func isoNow() -> String {
-        ISO8601DateFormatter.relay.string(from: Date())
+        ISO8601DateFormatter.hub.string(from: Date())
     }
 }
 
 extension ISO8601DateFormatter {
-    static let relay: ISO8601DateFormatter = {
+    static let hub: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter

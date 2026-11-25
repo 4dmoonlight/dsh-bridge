@@ -1,18 +1,18 @@
 /**
- * Relay REST 客户端:只做 HTTP 调用与错误归类,不含重试策略(重试在 index.js 的队列里)。
+ * Hub REST 客户端:只做 HTTP 调用与错误归类,不含重试策略(重试在 index.js 的队列里)。
  */
 
-export function createRelayClient({ getConfig }) {
+export function createHubClient({ getConfig }) {
   async function request(method, path, body) {
     const cfg = getConfig()
-    if (!cfg || !cfg.relay_url || !cfg.relay_token) {
-      throw new Error('relay_not_configured')
+    if (!cfg || !cfg.hub_url || !cfg.hub_token) {
+      throw new Error('hub_not_configured')
     }
-    const url = cfg.relay_url.replace(/\/+$/, '') + path
+    const url = cfg.hub_url.replace(/\/+$/, '') + path
     const res = await fetch(url, {
       method,
       headers: {
-        authorization: 'Bearer ' + cfg.relay_token,
+        authorization: 'Bearer ' + cfg.hub_token,
         ...(body === undefined ? {} : { 'content-type': 'application/json' }),
       },
       body: body === undefined ? undefined : JSON.stringify(body),

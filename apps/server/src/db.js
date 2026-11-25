@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { HttpError, clipText } from './util.js';
 
-export const DB_FILENAME = 'relay.sqlite';
+export const DB_FILENAME = 'bridge.sqlite';
 export const OFFLINE_AFTER_MS = 60_000;
 export const MESSAGE_TEXT_LIMIT = 20_000;
 export const DEFAULT_MESSAGE_LIMIT = 100;
@@ -63,12 +63,12 @@ export function deviceStatus(lastSeenAt, nowMs = Date.now()) {
 }
 
 /**
- * Open (and migrate) relay.sqlite in the relay data directory.
+ * Open (and migrate) bridge.sqlite in the hub data directory.
  * @param {{dataDir: string, now?: () => Date | string | number}} options
- * @returns {RelayDb}
+ * @returns {HubDb}
  */
 export function openDatabase(options) {
-  return new RelayDb(options);
+  return new HubDb(options);
 }
 
 /**
@@ -92,11 +92,11 @@ function emptyToNull(value) {
 /**
  * SQLite-backed cross-device store.
  *
- * Durability contract: WAL mode plus one transaction per mutation. The relay is
+ * Durability contract: WAL mode plus one transaction per mutation. The hub is
  * single-process by design (as is the JSON store), so DatabaseSync's synchronous
  * API is enough and keeps request ordering deterministic.
  */
-export class RelayDb {
+export class HubDb {
   /**
    * @param {{dataDir: string, now?: () => Date | string | number}} options
    */

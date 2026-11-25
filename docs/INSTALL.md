@@ -1,58 +1,58 @@
 # Install
 
-Two halves: the **relay server** (runs anywhere with Node) and the **macOS app**
-(reads local DSH sessions and keeps a relay poll open).
+Two halves: the **hub server** (runs anywhere with Node) and the **macOS app**
+(reads local DSH sessions and keeps a hub poll open).
 
 ## Requirements
 
 | Component | Needs |
 | --- | --- |
-| relay | Node.js **≥ 22.5** (uses ESM + `node:test`; no dependencies) |
+| hub | Node.js **≥ 22.5** (uses ESM + `node:test`; no dependencies) |
 | macOS app | macOS 13+, Xcode command line tools (`swift`), `zstd` (`brew install zstd`) for compressed DSH session files |
 | DSH | `~/.dsh/sessions` populated by a normal DeepSeek Harness install |
 
 ## One-click (same machine)
 
 ```bash
-git clone https://github.com/4dmoonlight/dsh-relay-sync.git
-cd dsh-relay-sync
+git clone https://github.com/4dmoonlight/dsh-bridge.git
+cd dsh-bridge
 ./install.sh all
 ```
 
 That:
 
-1. generates a relay token into `~/.dsh-relay-sync/relay.env`;
-2. installs a LaunchAgent `com.dsh-relay-sync.relay` (port 8787, restarts on crash);
-3. builds `relay-sync` in release mode and copies it to `~/.local/bin`;
-4. registers this Mac as a device (token saved to `~/.dsh-relay-sync/macos.json`, mode 0600);
-5. installs a LaunchAgent `com.dsh-relay-sync.host` running `relay-sync serve`.
+1. generates a hub token into `~/.dsh-bridge/hub.env`;
+2. installs a LaunchAgent `com.dsh-bridge.hub` (port 8787, restarts on crash);
+3. builds `dsh-bridge` in release mode and copies it to `~/.local/bin`;
+4. registers this Mac as a device (token saved to `~/.dsh-bridge/macos.json`, mode 0600);
+5. installs a LaunchAgent `com.dsh-bridge.host` running `dsh-bridge serve`.
 
 Verify:
 
 ```bash
-~/.local/bin/relay-sync doctor
-~/.local/bin/relay-sync list
+~/.local/bin/dsh-bridge doctor
+~/.local/bin/dsh-bridge list
 ```
 
-`doctor` checks the sessions directory, `zstd`, the config, and relay health.
+`doctor` checks the sessions directory, `zstd`, the config, and hub health.
 
-## One-click with a remote relay
+## One-click with a remote hub
 
 On the server (Linux or macOS, Node ≥ 22.5):
 
 ```bash
-git clone https://github.com/4dmoonlight/dsh-relay-sync.git
-cd dsh-relay-sync
-RELAY_TOKEN="$(node -e 'process.stdout.write(require("crypto").randomBytes(32).toString("base64url"))')" \
-RELAY_PORT=8787 RELAY_DATA_DIR=/var/lib/dsh-relay-sync \
-  nohup node apps/server/src/index.js >/tmp/dsh-relay-sync.log 2>&1 &
-echo "$RELAY_TOKEN"
+git clone https://github.com/4dmoonlight/dsh-bridge.git
+cd dsh-bridge
+BRIDGE_TOKEN="$(node -e 'process.stdout.write(require("crypto").randomBytes(32).toString("base64url"))')" \
+BRIDGE_PORT=8787 BRIDGE_DATA_DIR=/var/lib/dsh-bridge \
+  nohup node apps/server/src/index.js >/tmp/dsh-bridge.log 2>&1 &
+echo "$BRIDGE_TOKEN"
 ```
 
 Put it behind TLS (Caddy example):
 
 ```
-relay.example.com {
+hub.example.com {
   reverse_proxy 127.0.0.1:8787
 }
 ```
@@ -60,34 +60,34 @@ relay.example.com {
 On the Mac:
 
 ```bash
-./install.sh mac --relay https://relay.example.com --token "<token>" --yes
+./install.sh mac --hub https://hub.example.com --token "<token>" --yes
 ```
 
 ## Manual (no LaunchAgents)
 
 ```bash
-# relay
-RELAY_TOKEN=secret RELAY_PORT=8787 RELAY_DATA_DIR=~/.dsh-relay-sync/relay-data \
+# hub
+BRIDGE_TOKEN=secret BRIDGE_PORT=8787 BRIDGE_DATA_DIR=~/.dsh-bridge/hub-data \
   node apps/server/src/index.js
 
 # macOS app
 cd apps/macos && swift build -c release
-.build/release/relay-sync register --relay http://127.0.0.1:8787 --token secret --name my-mac
-.build/release/relay-sync push --limit 50      # one-shot push
-.build/release/relay-sync serve                # host mode: push + answer relay fetches
-.build/release/relay-sync list                 # read what the relay holds
-.build/release/relay-sync ui                   # SwiftUI window
+.build/release/dsh-bridge register --hub http://127.0.0.1:8787 --token secret --name my-mac
+.build/release/dsh-bridge push --limit 50      # one-shot push
+.build/release/dsh-bridge serve                # host mode: push + answer hub fetches
+.build/release/dsh-bridge list                 # read what the hub holds
+.build/release/dsh-bridge ui                   # SwiftUI window
 ```
 
 ## Installer flags
 
 ```
---token T        instance token (default: generated, or read from relay.env)
---relay URL      relay base URL (default http://127.0.0.1:8787)
+--token T        instance token (default: generated, or read from hub.env)
+--hub URL      hub base URL (default http://127.0.0.1:8787)
 --name NAME      device name (default: mac ComputerName)
---port N         relay port (default 8787)
+--port N         hub port (default 8787)
 --prefix DIR     CLI install prefix (default ~/.local)
---state-dir DIR  state directory (default ~/.dsh-relay-sync)
+--state-dir DIR  state directory (default ~/.dsh-bridge)
 --yes            do not prompt
 --no-agent       write files only; do not touch launchd
 --dry-run        print every action without doing it
@@ -99,16 +99,16 @@ cd apps/macos && swift build -c release
 ./install.sh uninstall
 ```
 
-State under `~/.dsh-relay-sync` (tokens, config, stored sessions) is kept; remove
+State under `~/.dsh-bridge` (tokens, config, stored sessions) is kept; remove
 it manually to wipe everything.
 
 ## Troubleshooting
 
 | Symptom | Cause / fix |
 | --- | --- |
-| `EADDRINUSE` on 8787 | another relay is running; `launchctl bootout gui/$(id -u)/com.dsh-relay-sync.relay` or use `--port` |
-| `401 unauthorized` | token mismatch; check `~/.dsh-relay-sync/relay.env` and the plist it wrote |
-| `409 host_offline` | the Mac's host loop is not running: `relay-sync serve`, or check `~/.dsh-relay-sync/host.err.log` |
+| `EADDRINUSE` on 8787 | another hub is running; `launchctl bootout gui/$(id -u)/com.dsh-bridge.hub` or use `--port` |
+| `401 unauthorized` | token mismatch; check `~/.dsh-bridge/hub.env` and the plist it wrote |
+| `409 host_offline` | the Mac's host loop is not running: `dsh-bridge serve`, or check `~/.dsh-bridge/host.err.log` |
 | `doctor` says zstd missing | `brew install zstd` (only needed for compressed `session.v4.jsonl.zstd`) |
-| `swift build` fails with `sandbox_apply` | you are inside another sandbox (CI, DSH); set `DSH_RELAY_SWIFTPM_SANDBOX=disable` |
-| empty session list | run `relay-sync push` once; `serve` pushes at start but only every 30 s afterwards |
+| `swift build` fails with `sandbox_apply` | you are inside another sandbox (CI, DSH); set `DSH_BRIDGE_SWIFTPM_SANDBOX=disable` |
+| empty session list | run `dsh-bridge push` once; `serve` pushes at start but only every 30 s afterwards |

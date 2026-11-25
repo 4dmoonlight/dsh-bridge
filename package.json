@@ -1,12 +1,12 @@
 {
-  "name": "dsh-relay-sync",
+  "name": "dsh-bridge",
   "private": true,
   "version": "0.2.0",
-  "description": "Relay-mediated DSH session sync: relay server, macOS client and the cross-device plugin",
+  "description": "Hub-mediated DSH session sync: hub server, macOS client and the cross-device plugin",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/4dmoonlight/dsh-relay-sync.git"
+    "url": "https://github.com/4dmoonlight/dsh-bridge.git"
   },
   "scripts": {
     "test": "pnpm -r --if-present test",

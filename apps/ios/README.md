@@ -1,4 +1,4 @@
-# RelaySync for iOS
+# BridgeSync for iOS
 
 跨设备会话查看器:和 `packages/dsh-cross-device` 插件功能对齐——用一次性配对码接入,
 按设备分组浏览会话,点开即可读消息并每 3 秒增量刷新。
@@ -10,14 +10,14 @@
 ```bash
 brew install xcodegen
 cd apps/ios && xcodegen generate
-open RelaySync.xcodeproj
+open BridgeSync.xcodeproj
 ```
 
 命令行构建模拟器版本:
 
 ```bash
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
-xcodebuild -project RelaySync.xcodeproj -scheme RelaySync \
+xcodebuild -project BridgeSync.xcodeproj -scheme BridgeSync \
   -sdk iphonesimulator -destination "generic/platform=iOS Simulator" build
 ```
 
@@ -34,7 +34,7 @@ token 存 Keychain,不需要手动抄写。断开重配在右上角菜单里。
 
 ## 实现要点
 
-- `RelayClient`:只调 `/api/v1` 的 `pairing/claim`、`sidebar`、`sessions/{id}/messages`,以及 `devices/heartbeat`
+- `HubClient`:只调 `/api/v1` 的 `pairing/claim`、`sidebar`、`sessions/{id}/messages`,以及 `devices/heartbeat`
 - `Store`:设备列表 5 秒轮询;打开会话后 3 秒增量轮询(`since_seq`),按 `msg_id` 去重
 - `device_id` 用 `identifierForVendor`,重装后不变,不会在别人的侧边栏留下离线幽灵设备
-- DEBUG 构建支持 `-relayURL`/`-pairCode`/`-autoOpen` 启动参数,便于自动化验证
+- DEBUG 构建支持 `-hubURL`/`-pairCode`/`-autoOpen` 启动参数,便于自动化验证

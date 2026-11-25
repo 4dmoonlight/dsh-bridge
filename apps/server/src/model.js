@@ -6,7 +6,7 @@ export const MAX_TEXT = 20000;
 
 /**
  * Validate and normalize one session pushed by a host.
- * Keep this strict: the relay stores whatever passes, and clients render it.
+ * Keep this strict: the hub stores whatever passes, and clients render it.
  */
 export function normalizeSession(input, deviceId, revision) {
   if (!input || typeof input !== 'object') throw new HttpError(422, 'invalid_session');

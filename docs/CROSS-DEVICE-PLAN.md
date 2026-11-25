@@ -1,13 +1,13 @@
 # 跨设备会话互联 — 改造计划
 
 生成时间:2026-11-25
-目标:两台电脑的 DSH 插件通过 dsh-relay-sync 互联,侧边栏按设备分组展示所有会话,点击可实时拉取并同步。
+目标:两台电脑的 DSH 插件通过 dsh-bridge 互联,侧边栏按设备分组展示所有会话,点击可实时拉取并同步。
 
 ## 一、勘察结论(现有可复用资产)
 
-### dsh-relay-sync 服务端(保留,增量扩展)
+### dsh-bridge 服务端(保留,增量扩展)
 - 零依赖 Node ESM,仅用 `node:` 内置模块(Node >= 22.5)
-- 现有 `/v1/*` 接口 + JSON 存储(`relay-store.json`)+ 长轮询 + SSE
+- 现有 `/v1/*` 接口 + JSON 存储(`hub-store.json`)+ 长轮询 + SSE
 - 已有 Bearer 鉴权(`safeEqual` 常量时间比较)、错误映射、CORS
 - **决策:不动 `/v1/*`,新增 `/api/v1/*` 并行存在**,老 Mac CLI 继续可用
 
@@ -70,7 +70,7 @@ dsh-cross-device/
   lib/index.js          服务端半:心跳/扫描/推送/重试队列/配置读写/暴露 /api/cross-device/config
   lib/client.js         客户端半:侧边栏插槽 + 设备分组 + 会话查看器 + WS
   lib/scan.js           会话文件解析(zstd 解压 + JSONL → 会话/消息)
-  lib/relay-client.js   Relay REST 调用 + 重试
+  lib/hub-client.js   Hub REST 调用 + 重试
 ```
 
 - **配置**:`~/.dsh/cross-device/config.json`(0600);首次启动生成 `device_id`(UUID)与 `device_name`(主机名)
@@ -83,7 +83,7 @@ dsh-cross-device/
 2. 服务端 `ws.js`(握手 + 帧 + 心跳 + 广播)
 3. 服务端 `api-v1.js` + 挂载
 4. 服务端测试(node:test,覆盖幂等/离线判定/增量拉取)
-5. 插件 `scan.js` + `relay-client.js`
+5. 插件 `scan.js` + `hub-client.js`
 6. 插件 `lib/index.js`(心跳/推送/重试)
 7. 插件 `lib/client.js`(侧边栏/查看器/WS)
 8. 双实例联调 + 三项验收

@@ -15,7 +15,7 @@ export class HttpError extends Error {
   }
 }
 
-export const PROTOCOL = 'relay/1';
+export const PROTOCOL = 'bridge/1';
 
 export function randomId(prefix, bytes = 12) {
   return prefix + randomBytes(bytes).toString('base64url');

@@ -1,15 +1,15 @@
 import AppKit
 import Combine
 import SwiftUI
-import RelaySyncKit
+import BridgeSyncKit
 
 @MainActor
 final class SessionModel: ObservableObject {
     @Published var sessions: [SessionSummary] = []
     @Published var selectedID: String? { didSet { if selectedID != oldValue { Task { await loadDetail() } } } }
-    @Published var detail: RelaySession?
+    @Published var detail: HubSession?
     @Published var status = "not configured"
-    @Published var relayURL = ""
+    @Published var hubURL = ""
     @Published var instanceToken = ""
     @Published var deviceName = ""
     @Published var busy = false
@@ -18,7 +18,7 @@ final class SessionModel: ObservableObject {
     let configStore: ConfigStore
     let sessionsRoot: String?
     private var config: MacConfig?
-    private var client: RelayClient?
+    private var client: HubClient?
 
     init(configStore: ConfigStore, sessionsRoot: String?) {
         self.configStore = configStore
@@ -32,7 +32,7 @@ final class SessionModel: ObservableObject {
             return
         }
         self.config = config
-        relayURL = config.relayURL
+        hubURL = config.hubURL
         instanceToken = config.instanceToken
         deviceName = config.deviceName
         do {
@@ -51,7 +51,7 @@ final class SessionModel: ObservableObject {
             let response = try await client.listSessions(limit: 100)
             sessions = response.sessions
             status = response.sessions.isEmpty
-                ? "relay reachable, no sessions yet"
+                ? "hub reachable, no sessions yet"
                 : "\(response.sessions.count) session(s)"
         } catch {
             status = "refresh failed: " + String(describing: error)
@@ -68,8 +68,8 @@ final class SessionModel: ObservableObject {
     }
 
     func saveSettings() async {
-        var config = self.config ?? MacConfig(relayURL: relayURL, instanceToken: instanceToken, deviceName: deviceName)
-        config.relayURL = relayURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        var config = self.config ?? MacConfig(hubURL: hubURL, instanceToken: instanceToken, deviceName: deviceName)
+        config.hubURL = hubURL.trimmingCharacters(in: .whitespacesAndNewlines)
         config.instanceToken = instanceToken.trimmingCharacters(in: .whitespacesAndNewlines)
         config.deviceName = deviceName
         do {
@@ -84,15 +84,15 @@ final class SessionModel: ObservableObject {
     }
 
     func registerDevice() async {
-        let urlString = relayURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let urlString = hubURL.trimmingCharacters(in: .whitespacesAndNewlines)
         let token = instanceToken.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let url = URL(string: urlString) else { status = "invalid relay URL"; return }
+        guard let url = URL(string: urlString) else { status = "invalid hub URL"; return }
         busy = true
         defer { busy = false }
         do {
-            let response = try await RelayClient(baseURL: url, token: token)
+            let response = try await HubClient(baseURL: url, token: token)
                 .register(name: deviceName.isEmpty ? "mac" : deviceName, platform: "macos", hostname: ProcessInfo.processInfo.hostName)
-            var config = MacConfig(relayURL: urlString, instanceToken: token, deviceName: deviceName)
+            var config = MacConfig(hubURL: urlString, instanceToken: token, deviceName: deviceName)
             config.deviceId = response.device.id
             config.deviceToken = response.token
             try configStore.save(config)
@@ -177,7 +177,7 @@ struct SessionListView: View {
                 } else {
                     VStack(spacing: 8) {
                         Text("Select a synced session").font(.title3)
-                        Text("The left list is served by your relay; contents stay whatever your Mac pushed.")
+                        Text("The left list is served by your hub; contents stay whatever your Mac pushed.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -203,10 +203,10 @@ struct SettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Relay settings").font(.headline)
-            Text("Instance token is the relay-wide secret; the device token is issued by Register.")
+            Text("Hub settings").font(.headline)
+            Text("Instance token is the hub-wide secret; the device token is issued by Register.")
                 .font(.caption).foregroundStyle(.secondary)
-            TextField("Relay URL (http://127.0.0.1:8787)", text: $model.relayURL)
+            TextField("Hub URL (http://127.0.0.1:8787)", text: $model.hubURL)
                 .textFieldStyle(.roundedBorder)
             TextField("Instance token", text: $model.instanceToken)
                 .textFieldStyle(.roundedBorder)
@@ -237,7 +237,7 @@ func runUI(configStore: ConfigStore, sessionsRoot: String?) {
         backing: .buffered,
         defer: false
     )
-    window.title = "Relay Sync"
+    window.title = "Hub Sync"
     window.center()
     window.contentView = NSHostingView(rootView: SessionListView(model: model))
     window.makeKeyAndOrderFront(nil)
@@ -247,7 +247,7 @@ func runUI(configStore: ConfigStore, sessionsRoot: String?) {
     let appMenuItem = NSMenuItem()
     mainMenu.addItem(appMenuItem)
     let appMenu = NSMenu()
-    appMenu.addItem(withTitle: "Quit Relay Sync", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+    appMenu.addItem(withTitle: "Quit Hub Sync", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
     appMenuItem.submenu = appMenu
     app.mainMenu = mainMenu
 

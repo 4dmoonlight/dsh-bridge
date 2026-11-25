@@ -12,13 +12,13 @@ const EMPTY = () => ({ version: 1, createdAt: nowIso(), devices: {}, sessions: {
  * every mutation, so a crash cannot leave a half-written file. Concurrency is
  * handled by serializing mutations through one promise chain; read paths read
  * the in-memory copy. Multi-process deployments are explicitly unsupported —
- * use one relay process per data directory.
+ * use one hub process per data directory.
  */
 export class Store {
   /** @param {{dataDir: string, fileName?: string}} options */
   constructor(options) {
     this.dataDir = options.dataDir;
-    this.file = join(options.dataDir, options.fileName ?? 'relay-store.json');
+    this.file = join(options.dataDir, options.fileName ?? 'hub-store.json');
     this.state = EMPTY();
     this._queue = Promise.resolve();
   }

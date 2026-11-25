@@ -2,19 +2,19 @@
 import PackageDescription
 
 let package = Package(
-    name: "relay-sync",
+    name: "dsh-bridge",
     platforms: [.macOS(.v13)],
     products: [
-        .executable(name: "relay-sync", targets: ["RelaySyncCLI"]),
-        .library(name: "RelaySyncKit", targets: ["RelaySyncKit"]),
+        .executable(name: "dsh-bridge", targets: ["BridgeSyncCLI"]),
+        .library(name: "BridgeSyncKit", targets: ["BridgeSyncKit"]),
     ],
     targets: [
-        .target(name: "RelaySyncKit"),
+        .target(name: "BridgeSyncKit"),
         .executableTarget(
-            name: "RelaySyncCLI",
-            dependencies: ["RelaySyncKit"],
-            path: "Sources/RelaySyncCLI"
+            name: "BridgeSyncCLI",
+            dependencies: ["BridgeSyncKit"],
+            path: "Sources/BridgeSyncCLI"
         ),
-        .testTarget(name: "RelaySyncKitTests", dependencies: ["RelaySyncKit"]),
+        .testTarget(name: "BridgeSyncKitTests", dependencies: ["BridgeSyncKit"]),
     ]
 )

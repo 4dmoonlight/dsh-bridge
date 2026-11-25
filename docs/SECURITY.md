@@ -2,8 +2,8 @@
 
 ## What this MVP is
 
-A **single-tenant relay** for one operator: it stores session text in plaintext on
-the relay host and authenticates everything with bearer tokens. It is designed for
+A **single-tenant hub** for one operator: it stores session text in plaintext on
+the hub host and authenticates everything with bearer tokens. It is designed for
 loopback, a private network, or a TLS reverse proxy you control. It is **not**
 multi-tenant and it is **not** end-to-end encrypted.
 
@@ -11,9 +11,9 @@ multi-tenant and it is **not** end-to-end encrypted.
 
 | Actor | Can | Cannot |
 | --- | --- | --- |
-| anyone with the instance token | read/delete every stored session, register devices, call the relay | reach the Mac unless the host loop is running |
+| anyone with the instance token | read/delete every stored session, register devices, call the hub | reach the Mac unless the host loop is running |
 | anyone with a device token | push sessions as that device, keep a host poll, read stored sessions | register other devices (needs instance token) |
-| relay operator | read plaintext sessions, see device names and workspaces | read local files the Mac did not push; read anything while offline beyond the stored copy |
+| hub operator | read plaintext sessions, see device names and workspaces | read local files the Mac did not push; read anything while offline beyond the stored copy |
 | network observer (no TLS) | read tokens and session text | — |
 | another local user on the Mac | read config only if file permissions break (0600 is enforced on save) | — |
 
@@ -30,29 +30,29 @@ multi-tenant and it is **not** end-to-end encrypted.
 
 ## Hardening checklist before exposing it
 
-1. Terminate TLS in front of the relay (Caddy, nginx, Cloudflare Tunnel) — do not
+1. Terminate TLS in front of the hub (Caddy, nginx, Cloudflare Tunnel) — do not
    serve `http://` on a public interface; tokens travel in clear text otherwise.
-2. Bind the relay to `127.0.0.1` and publish it only through the proxy
-   (`RELAY_HOST=127.0.0.1`).
+2. Bind the hub to `127.0.0.1` and publish it only through the proxy
+   (`BRIDGE_HOST=127.0.0.1`).
 3. Use a 32-byte random instance token (`install.sh` generates one) and keep
-   `relay.env` at mode 0600.
-4. Rotate device tokens by re-registering (`relay-sync register …`); the old token
+   `hub.env` at mode 0600.
+4. Rotate device tokens by re-registering (`dsh-bridge register …`); the old token
    stops working immediately.
-5. Restrict the data directory (`relay-store.json`) to the relay user; it contains
+5. Restrict the data directory (`hub-store.json`) to the hub user; it contains
    plaintext session text.
 6. Push as little as you need: `--limit` caps how many sessions are uploaded, and
    the Mac trims to the last 200 messages per session.
-7. Treat the relay as untrusted for anything sensitive; run it on a host you
+7. Treat the hub as untrusted for anything sensitive; run it on a host you
    control, or use a private network (Tailscale/WireGuard).
 
 ## Data at rest
 
 | Where | What | Protection |
 | --- | --- | --- |
-| relay `relay-store.json` | session titles, workspaces, message text | filesystem permissions only — plaintext |
-| relay store | device tokens | SHA-256 digests only |
-| Mac `~/.dsh-relay-sync/macos.json` | instance token, device token | 0600 |
-| Mac `relay.env` | instance token | 0600 |
+| hub `hub-store.json` | session titles, workspaces, message text | filesystem permissions only — plaintext |
+| hub store | device tokens | SHA-256 digests only |
+| Mac `~/.dsh-bridge/macos.json` | instance token, device token | 0600 |
+| Mac `hub.env` | instance token | 0600 |
 
 ## Reporting
 

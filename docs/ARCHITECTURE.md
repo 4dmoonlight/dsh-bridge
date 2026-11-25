@@ -2,14 +2,14 @@
 
 ```
 ┌──────────────────────────────┐          ┌───────────────────────┐
-│ macOS app (`relay-sync`)      │          │ relay server          │
+│ macOS app (`dsh-bridge`)      │          │ hub server          │
 │                              │  HTTPS   │ (Node, zero deps)     │
 │  DSHReader ──► SyncEngine ───┼─────────►│ /v1/sessions/sync     │
 │   ~/.dsh/sessions            │          │ /v1/host/commands     │
-│                              │◄─────────┤ /v1/relay/.../fetch   │
+│                              │◄─────────┤ /v1/hub/.../fetch   │
 │  SwiftUI window / CLI        │  long-   │                       │
 └──────────────────────────────┘  poll    │  store (JSON, atomic) │
-                                          │  relay hub (in-memory)│
+                                          │  hub hub (in-memory)│
 ┌──────────────────────────────┐          │  SSE hub              │
 │ any other client (future:    │◄────────►│                       │
 │ iOS, web, another Mac)       │  HTTP    └───────────────────────┘
@@ -19,13 +19,13 @@
 ## Two data paths
 
 **Store and forward.** The Mac reads DSH sessions, trims them, and pushes a
-snapshot. The relay keeps one bounded copy per session, so any client can read
+snapshot. The hub keeps one bounded copy per session, so any client can read
 the latest state even when the Mac is asleep or behind a NAT.
 
-**Live relay.** The host keeps one outbound long-poll open. A client asks the
-relay for a session with `POST /v1/relay/sessions/{id}/fetch`; the relay
+**Live hub.** The host keeps one outbound long-poll open. A client asks the
+hub for a session with `POST /v1/hub/sessions/{id}/fetch`; the hub
 dispatches `session.fetch` to the parked poll, the Mac answers with the current
-on-disk session, and the HTTP request resolves. If the host is offline the relay
+on-disk session, and the HTTP request resolves. If the host is offline the hub
 answers `409 host_offline` or returns the stored copy when `fallback: "stored"`.
 
 The two paths are deliberately separate. Storage gives offline reads without
@@ -38,19 +38,19 @@ inbound port on the Mac.
 | --- | --- |
 | `apps/server/src/app.js` | routing, auth, error mapping; one process, one data dir |
 | `apps/server/src/store.js` | JSON store, atomic replace, revision counter, upsert/skip semantics |
-| `apps/server/src/relay.js` | parked long-polls, command ids, timeouts, result correlation |
+| `apps/server/src/hub.js` | parked long-polls, command ids, timeouts, result correlation |
 | `apps/server/src/events.js` | SSE subscribers and fan-out |
 | `apps/server/src/model.js` | validation and normalization of pushed sessions |
-| `apps/macos/Sources/RelaySyncKit/DSHReader.swift` | DSH v4 JSONL adapter (`zstd -dc` when compressed) |
-| `apps/macos/Sources/RelaySyncKit/RelayClient.swift` | typed HTTP client |
-| `apps/macos/Sources/RelaySyncKit/SyncEngine.swift` | push loop, host loop, command handling |
-| `apps/macos/Sources/RelaySyncCLI` | CLI + SwiftUI window |
+| `apps/macos/Sources/BridgeSyncKit/DSHReader.swift` | DSH v4 JSONL adapter (`zstd -dc` when compressed) |
+| `apps/macos/Sources/BridgeSyncKit/HubClient.swift` | typed HTTP client |
+| `apps/macos/Sources/BridgeSyncKit/SyncEngine.swift` | push loop, host loop, command handling |
+| `apps/macos/Sources/BridgeSyncCLI` | CLI + SwiftUI window |
 
 ## Storage and limits
 
-- One JSON file (`relay-store.json`) under `--data-dir`; every mutation writes a
+- One JSON file (`hub-store.json`) under `--data-dir`; every mutation writes a
   temp file and renames it, so a crash cannot tear the file.
-- Mutations are serialized in-process. **Run exactly one relay process per data
+- Mutations are serialized in-process. **Run exactly one hub process per data
   directory**; this is not a clustered store. A SQLite or PostgreSQL backend is
   the natural next step and is not implemented.
 - Sessions are capped at 2000 messages, 20 000 chars per message, and 16 MiB per
@@ -60,16 +60,16 @@ inbound port on the Mac.
 ## How this relates to the two reference projects
 
 Both references solve the same problem with different trade-offs; this MVP picks
-the smallest slice that still gives *relay-mediated session sync*.
+the smallest slice that still gives *hub-mediated session sync*.
 
 - [ds-harness-remote](https://github.com/liguobao/ds-harness-remote) — WebSocket control
-  plane, blind relay, Noise E2E; the server never stores session content.
+  plane, blind hub, Noise E2E; the server never stores session content.
 - [dsh-mobile-plugin](https://github.com/WNLUO/dsh-mobile-plugin) — host dials out over
   WSS with a binary frame codec and QR/code pairing.
 
-| | ds-harness-remote | dsh-mobile-plugin | dsh-relay-sync (this repo) |
+| | ds-harness-remote | dsh-mobile-plugin | dsh-bridge (this repo) |
 | --- | --- | --- | --- |
-| Transport | WebSocket control + blind relay + optional WebRTC/TURN | outbound WSS tunnel, binary frames | HTTP long-poll, no websocket |
+| Transport | WebSocket control + blind hub + optional WebRTC/TURN | outbound WSS tunnel, binary frames | HTTP long-poll, no websocket |
 | Session content on server | never (Noise ciphertext only) | not stored; host answers live | bounded copy stored + live passthrough |
 | Pairing | account login + device registration | QR/code pairing, HKDF-sealed | instance token + device token |
 | End-to-end encryption | Noise IK | per-device keys | **not implemented** (see SECURITY) |

@@ -1,11 +1,11 @@
-# dsh-relay-sync
+# dsh-bridge
 
 给 DeepSeek Harness（DSH）做的**会话同步中转**：Mac 上读取本地会话，推给一台你自己控制的中转服务器；其他设备（或另一台 Mac）从中转读，或让它实时向 Mac 要最新版本。
 
 首个版本（macOS）**只做会话同步**——不同步终端、文件、模型配置，也不做聊天转发。
 
 ```
-Mac (relay-sync)  ──push──►  中转服务器 (relay)  ◄──list/read──  其他客户端
+Mac (dsh-bridge)  ──push──►  中转服务器 (hub)  ◄──list/read──  其他客户端
        ▲                          │
        └──── long-poll 取指令 ─────┘   在线时实时取最新会话，离线时读已存快照
 ```
@@ -30,42 +30,42 @@ Mac (relay-sync)  ──push──►  中转服务器 (relay)  ◄──list/re
 要求：macOS 13+、Node ≥ 22.5、Xcode 命令行工具、`zstd`（`brew install zstd`）。
 
 ```bash
-git clone https://github.com/4dmoonlight/dsh-relay-sync.git
-cd dsh-relay-sync
+git clone https://github.com/4dmoonlight/dsh-bridge.git
+cd dsh-bridge
 ./install.sh all
 ```
 
-安装脚本会：生成中转令牌 → 起中转（LaunchAgent，默认 8787）→ 编译并安装 `relay-sync` 到 `~/.local/bin` → 注册本机 → 起宿主循环（LaunchAgent）。
+安装脚本会：生成中转令牌 → 起中转（LaunchAgent，默认 8787）→ 编译并安装 `dsh-bridge` 到 `~/.local/bin` → 注册本机 → 起宿主循环（LaunchAgent）。
 
 验证：
 
 ```bash
-~/.local/bin/relay-sync doctor
-~/.local/bin/relay-sync push --limit 50
-~/.local/bin/relay-sync list
+~/.local/bin/dsh-bridge doctor
+~/.local/bin/dsh-bridge push --limit 50
+~/.local/bin/dsh-bridge list
 ```
 
-想看界面：`~/.local/bin/relay-sync ui`。
+想看界面：`~/.local/bin/dsh-bridge ui`。
 
 ## 命令
 
 | 命令 | 作用 |
 | --- | --- |
-| `relay-sync register --relay URL --token T` | 注册本机，保存设备令牌 |
-| `relay-sync push [--limit N] [--full]` | 读取 `~/.dsh/sessions` 并推送 |
-| `relay-sync serve` | 宿主模式：定时推送 + 保持 long-poll 应答实时请求 |
-| `relay-sync list [--query Q]` | 列出中转上的会话 |
-| `relay-sync show <id>` | 打印一条会话的完整内容 |
-| `relay-sync ui` | 打开 SwiftUI 窗口 |
-| `relay-sync doctor` | 自检：会话目录、zstd、配置、中转健康 |
-| `relay-sync config` | 显示配置（令牌打码） |
+| `dsh-bridge register --hub URL --token T` | 注册本机，保存设备令牌 |
+| `dsh-bridge push [--limit N] [--full]` | 读取 `~/.dsh/sessions` 并推送 |
+| `dsh-bridge serve` | 宿主模式：定时推送 + 保持 long-poll 应答实时请求 |
+| `dsh-bridge list [--query Q]` | 列出中转上的会话 |
+| `dsh-bridge show <id>` | 打印一条会话的完整内容 |
+| `dsh-bridge ui` | 打开 SwiftUI 窗口 |
+| `dsh-bridge doctor` | 自检：会话目录、zstd、配置、中转健康 |
+| `dsh-bridge config` | 显示配置（令牌打码） |
 
 ## 中转服务
 
 零依赖，直接跑：
 
 ```bash
-RELAY_TOKEN=secret RELAY_PORT=8787 RELAY_DATA_DIR=~/.dsh-relay-sync/relay-data \
+BRIDGE_TOKEN=secret BRIDGE_PORT=8787 BRIDGE_DATA_DIR=~/.dsh-bridge/hub-data \
   node apps/server/src/index.js
 ```
 
@@ -73,7 +73,7 @@ RELAY_TOKEN=secret RELAY_PORT=8787 RELAY_DATA_DIR=~/.dsh-relay-sync/relay-data \
 
 ## 一起看
 
-- 协议：[docs/PROTOCOL.md](docs/PROTOCOL.md)（`relay/1`，全部端点与错误码）
+- 协议：[docs/PROTOCOL.md](docs/PROTOCOL.md)（`bridge/1`，全部端点与错误码）
 - 架构与取舍：[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - 安装与排障：[docs/INSTALL.md](docs/INSTALL.md)
 - 安全边界：[docs/SECURITY.md](docs/SECURITY.md)

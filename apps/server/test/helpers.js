@@ -1,13 +1,13 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createRelayApp } from '../src/app.js';
+import { createHubApp } from '../src/app.js';
 
 export const INSTANCE_TOKEN = 'test-instance-token';
 
-export async function startRelay(overrides = {}) {
-  const dataDir = await mkdtemp(join(tmpdir(), 'relay-test-'));
-  const app = await createRelayApp({ dataDir, instanceToken: INSTANCE_TOKEN, logger: { info() {}, error() {} }, ...overrides });
+export async function startHub(overrides = {}) {
+  const dataDir = await mkdtemp(join(tmpdir(), 'hub-test-'));
+  const app = await createHubApp({ dataDir, instanceToken: INSTANCE_TOKEN, logger: { info() {}, error() {} }, ...overrides });
   const { url } = await app.listen(0, '127.0.0.1');
   return {
     app,
@@ -50,7 +50,7 @@ export async function registerDevice(url, name, platform = 'darwin') {
 export function sessionPayload(overrides = {}) {
   return {
     id: 'sess-1',
-    title: 'Study the relay',
+    title: 'Study the hub',
     workspace: '/Users/me/Dev',
     engine: 'dsh',
     createdAt: '2026-11-20T10:00:00.000Z',
