@@ -3,7 +3,7 @@ import SwiftUI
 /// 首次使用:输入中继地址 + 旧设备上的 6 位配对码。全程不需要手抄 token。
 struct PairingView: View {
   @EnvironmentObject private var store: Store
-  @State private var relayText = "https://relay.hahahahaha.party"
+  @State private var relayText = ""
   @State private var code = ""
 
   var body: some View {
@@ -56,6 +56,12 @@ struct PairingView: View {
         }
       }
       .navigationTitle("连接中继")
+      .task {
+        // 预填"上次用过的地址",而不是把某个具体部署写死进源码。
+        if relayText.isEmpty, let saved = Keychain.get("relay_url") {
+          relayText = saved
+        }
+      }
     }
   }
 }
