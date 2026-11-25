@@ -12,7 +12,7 @@ targets:
       - path: BridgeSync
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.4dmoonlight.hubsync
+        PRODUCT_BUNDLE_IDENTIFIER: com.4dmoonlight.bridgesync
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_CFBundleDisplayName: BridgeSync
