@@ -1,5 +1,10 @@
-import { mkdirSync } from 'node:fs';
-import { randomInt } from 'node:crypto';
+import { chmodSync, mkdirSync } from 'node:fs';
+import { createHash, randomBytes, randomInt } from 'node:crypto';
+
+/** token 只以 sha256 摘要形式落库。 */
+export function hashToken(token) {
+  return createHash('sha256').update(token).digest('hex');
+}
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { HttpError, clipText } from './util.js';
@@ -40,6 +45,17 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 CREATE INDEX IF NOT EXISTS idx_messages_session_seq ON messages(session_id, seq);
 CREATE INDEX IF NOT EXISTS idx_sessions_device_updated ON sessions(device_id, updated_at DESC);
+-- 每台设备自己的凭据:token 只存 sha256 摘要,泄漏数据库也拿不到可用 token。
+CREATE TABLE IF NOT EXISTS device_tokens (
+  token_hash TEXT PRIMARY KEY,
+  device_id TEXT NOT NULL,
+  scopes TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  last_used_at TEXT,
+  revoked_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_device_tokens_device ON device_tokens(device_id);
+
 CREATE TABLE IF NOT EXISTS pairing_codes (
   code TEXT PRIMARY KEY,
   created_at TEXT NOT NULL,
@@ -106,8 +122,14 @@ export class HubDb {
     this.clock = options.now ?? (() => new Date());
     this.closed = false;
 
-    mkdirSync(this.dataDir, { recursive: true });
+    // 数据目录只给服务用户:里面是明文会话内容,同机其他用户不该读到。
+    mkdirSync(this.dataDir, { recursive: true, mode: 0o700 });
     this.database = new DatabaseSync(this.file, { timeout: 5000 });
+    try {
+      chmodSync(this.file, 0o600);
+    } catch {
+      /* 文件系统不支持时忽略 */
+    }
     this.database.exec('PRAGMA journal_mode = WAL');
     this.database.exec('PRAGMA synchronous = NORMAL');
     this.database.exec(SCHEMA);
@@ -128,7 +150,6 @@ export class HubDb {
         INSERT INTO sessions (session_id, device_id, title, latest_seq, updated_at)
         VALUES (?, ?, ?, 0, ?)
         ON CONFLICT(session_id) DO UPDATE SET
-          device_id = excluded.device_id,
           title = excluded.title,
           updated_at = CASE
             WHEN sessions.updated_at IS NULL THEN excluded.updated_at
@@ -136,6 +157,9 @@ export class HubDb {
             WHEN excluded.updated_at > sessions.updated_at THEN excluded.updated_at
             ELSE sessions.updated_at
           END
+        -- 归属不可被覆盖:否则 B 用自己合法的凭据提交 A 的 session_id 就能抢走会话。
+        -- 条件不成立时 changes=0,由 syncSessions 记为 rejected。
+        WHERE sessions.device_id = excluded.device_id
       `),
       getSession: this.database.prepare('SELECT * FROM sessions WHERE session_id = ?'),
       ensureSession: this.database.prepare(`
@@ -155,6 +179,17 @@ export class HubDb {
         INSERT OR IGNORE INTO messages (msg_id, session_id, device_id, role, content, created_at)
         VALUES (?, ?, ?, ?, ?, ?)
       `),
+      insertDeviceToken: this.database.prepare(
+        'INSERT INTO device_tokens (token_hash, device_id, scopes, created_at) VALUES (?, ?, ?, ?)',
+      ),
+      getDeviceToken: this.database.prepare('SELECT * FROM device_tokens WHERE token_hash = ?'),
+      touchDeviceToken: this.database.prepare('UPDATE device_tokens SET last_used_at = ? WHERE token_hash = ?'),
+      revokeDeviceToken: this.database.prepare(
+        'UPDATE device_tokens SET revoked_at = ? WHERE token_hash = ? AND revoked_at IS NULL',
+      ),
+      listDeviceTokens: this.database.prepare(
+        'SELECT device_id, scopes, created_at, last_used_at, revoked_at FROM device_tokens ORDER BY created_at DESC',
+      ),
       insertPairing: this.database.prepare(
         'INSERT INTO pairing_codes (code, created_at, expires_at, used_at) VALUES (?, ?, ?, NULL)',
       ),
@@ -217,6 +252,7 @@ export class HubDb {
   syncSessions(input) {
     const now = this.nowIso();
     const accepted = [];
+    const rejected = [];
     const seen = new Set();
 
     this.database.exec('BEGIN IMMEDIATE');
@@ -225,7 +261,12 @@ export class HubDb {
         const sessionId = session.session_id;
         const title = clipText(typeof session.title === 'string' ? session.title : '', SESSION_TITLE_LIMIT);
         const updatedAt = normalizeIso(session.updated_at, now);
-        this.statements.upsertSession.run(sessionId, input.deviceId, title, updatedAt);
+        const result = this.statements.upsertSession.run(sessionId, input.deviceId, title, updatedAt);
+        if (Number(result.changes) === 0) {
+          // 会话已存在且属于别的设备,拒绝而不是静默覆盖。
+          if (!rejected.includes(sessionId)) rejected.push(sessionId);
+          continue;
+        }
         if (!seen.has(sessionId)) {
           seen.add(sessionId);
           accepted.push(sessionId);
@@ -237,13 +278,48 @@ export class HubDb {
       throw error;
     }
 
-    return { accepted, updated: accepted.length };
+    return { accepted, updated: accepted.length, rejected };
   }
 
   /** @param {string} sessionId */
   getSession(sessionId) {
     const row = this.statements.getSession.get(sessionId);
     return row ? publicSession(row) : null;
+  }
+
+  /**
+   * 给一台设备发放独立凭据。只在这里返回明文,库里永远只有摘要。
+   * @param {string} deviceId
+   * @param {string} scopes 逗号分隔,如 'read:all,write:self'
+   * @returns {{ token: string, token_hash: string }}
+   */
+  createDeviceToken(deviceId, scopes) {
+    const token = randomBytes(32).toString('base64url');
+    const tokenHash = hashToken(token);
+    this.statements.insertDeviceToken.run(tokenHash, deviceId, scopes, new Date().toISOString());
+    return { token, token_hash: tokenHash };
+  }
+
+  /**
+   * 按明文 token 查凭据。未吊销才返回。
+   * @param {string} token
+   * @returns {{ device_id: string, scopes: string } | null}
+   */
+  findDeviceToken(token) {
+    const tokenHash = hashToken(token);
+    const row = this.statements.getDeviceToken.get(tokenHash);
+    if (!row || row.revoked_at) return null;
+    this.statements.touchDeviceToken.run(new Date().toISOString(), tokenHash);
+    return { device_id: row.device_id, scopes: row.scopes };
+  }
+
+  /** @param {string} token */
+  revokeDeviceToken(token) {
+    return Number(this.statements.revokeDeviceToken.run(new Date().toISOString(), hashToken(token)).changes) === 1;
+  }
+
+  listDeviceTokens() {
+    return this.statements.listDeviceTokens.all();
   }
 
   /**

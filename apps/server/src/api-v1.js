@@ -5,6 +5,7 @@ import {
   MESSAGE_TEXT_LIMIT,
   PLATFORMS,
 } from './db.js';
+import { randomUUID } from 'node:crypto';
 import { HttpError, PROTOCOL, clipText, isIsoDate, readJson, safeEqual, sendJson } from './util.js';
 import { WS_PATH, rejectUpgrade } from './ws.js';
 
@@ -55,12 +56,41 @@ export function createApiV1(options) {
    * 无法在握手时设置自定义头),否则 token 会出现在 URL、代理日志与浏览器历史里。
    * @param {import('node:http').IncomingMessage} req
    */
-  function requireToken(req) {
+  function bearerOf(req) {
     const header = req.headers.authorization;
-    const token = typeof header === 'string' && header.startsWith('Bearer ') ? header.slice(7).trim() : '';
-    if (!token || !safeEqual(token, instanceToken)) {
-      throw new HttpError(401, 'unauthorized', 'instance token required');
+    return typeof header === 'string' && header.startsWith('Bearer ') ? header.slice(7).trim() : '';
+  }
+
+  /**
+   * 解析调用方身份。两种凭据:
+   *  - 实例 token:老客户端在用,视为管理员(可以指定 device_id、能发配对码)
+   *  - 设备 token:绑定到一台设备,身份由凭据推导,**不接受请求体自报身份**
+   * @returns {{ deviceId: string|null, legacy: boolean }}
+   */
+  function authenticate(req) {
+    const token = bearerOf(req);
+    if (!token) throw new HttpError(401, 'unauthorized', 'token required');
+    if (safeEqual(token, instanceToken)) {
+      return { deviceId: null, legacy: true };
     }
+    const device = db.findDeviceToken(token);
+    if (!device) throw new HttpError(401, 'unauthorized', 'invalid or revoked token');
+    return { deviceId: device.device_id, legacy: false };
+  }
+
+  /**
+   * 解析本次写入归属哪台设备。持有设备凭据时身份即凭据,
+   * 请求体里的 device_id 若不一致直接拒绝(否则就是冒名写入)。
+   */
+  function resolveDeviceId(auth, body) {
+    if (auth.legacy) {
+      return requiredString(body.device_id, 'device_id', MAX_ID_LENGTH);
+    }
+    const claimed = typeof body.device_id === 'string' ? body.device_id.trim() : '';
+    if (claimed && claimed !== auth.deviceId) {
+      throw new HttpError(403, 'device_mismatch', 'credential is bound to a different device');
+    }
+    return auth.deviceId;
   }
 
   /**
@@ -86,15 +116,23 @@ export function createApiV1(options) {
       if (!db.claimPairingCode(code)) {
         throw new HttpError(404, 'pairing_code_invalid', 'code is wrong, used, or expired');
       }
-      sendJson(res, 200, { protocol: PROTOCOL, token: instanceToken });
+      // 只发设备专属凭据:认领者拿到的是绑定到自己的 token,不是全实例的钥匙。
+      const newDeviceId = randomUUID();
+      const issued = db.createDeviceToken(newDeviceId, 'read:all,write:self');
+      sendJson(res, 200, { protocol: PROTOCOL, token: issued.token, device_id: newDeviceId });
       return true;
     }
 
     // Authenticate before routing so unauthenticated probes cannot tell which
     // /api/v1 paths exist.
-    requireToken(req);
+    const auth = authenticate(req);
 
     if (method === 'POST' && path === '/api/v1/pairing/code') {
+      // 只有管理员(实例凭据)能拉新设备。设备凭据不行,否则任何一台设备
+      // 被攻破后都能继续扩大访问面。
+      if (!auth.legacy) {
+        throw new HttpError(403, 'forbidden', 'only an admin credential can issue pairing codes');
+      }
       const payload = db.createPairingCode(PAIRING_TTL_MS);
       sendJson(res, 200, { code: payload.code, expires_at: payload.expires_at, ttl_seconds: Math.floor(PAIRING_TTL_MS / 1000) });
       return true;
@@ -102,7 +140,7 @@ export function createApiV1(options) {
 
     if (method === 'POST' && path === '/api/v1/devices/heartbeat') {
       const body = await readBody(req);
-      const deviceId = requiredString(body.device_id, 'device_id', MAX_ID_LENGTH);
+      const deviceId = resolveDeviceId(auth, body);
       const deviceName = requiredString(body.device_name, 'device_name', MAX_ID_LENGTH);
       const platform = requiredString(body.platform, 'platform', 20);
       if (!PLATFORMS.has(platform)) {
@@ -122,7 +160,7 @@ export function createApiV1(options) {
 
     if (method === 'POST' && path === '/api/v1/sessions/sync') {
       const body = await readBody(req);
-      const deviceId = requiredString(body.device_id, 'device_id', MAX_ID_LENGTH);
+      const deviceId = resolveDeviceId(auth, body);
       if (!Array.isArray(body.sessions)) throw new HttpError(400, 'invalid_sessions', 'sessions array required');
 
       const sessions = body.sessions.map((session, index) => {
@@ -151,6 +189,11 @@ export function createApiV1(options) {
           updated_at: session.updated_at,
         });
       }
+      // 全批都被拒说明客户端搞错了归属,单独给 409;部分成功仍返回 200
+      // 并在 rejected 里列出冲突项,方便客户端区分。
+      if (result.rejected.length && result.accepted.length === 0) {
+        throw new HttpError(409, 'session_conflict', 'sessions belong to other devices');
+      }
       sendJson(res, 200, result);
       return true;
     }
@@ -159,12 +202,18 @@ export function createApiV1(options) {
     if (messagesMatch && method === 'POST') {
       const sessionId = decodeSessionId(messagesMatch[1]);
       const body = await readBody(req);
-      const deviceId = requiredString(body.device_id, 'device_id', MAX_ID_LENGTH);
+      const deviceId = resolveDeviceId(auth, body);
       if (!Array.isArray(body.messages)) throw new HttpError(400, 'invalid_messages', 'messages array required');
 
       // 会话必须先由 sessions/sync 建立;否则任意拼一个 session_id 都能凭空造出会话。
-      if (!db.getSession(sessionId)) {
+      const existing = db.getSession(sessionId);
+      if (!existing) {
         throw new HttpError(404, 'session_not_found', `session ${sessionId} is unknown`);
+      }
+      // 归属校验:设备凭据只能往自己的会话里写。否则 B 用自己的合法凭据就能
+      // 往 A 的会话里塞消息。实例 token 视为管理员,保留兼容。
+      if (!auth.legacy && existing.device_id !== deviceId) {
+        throw new HttpError(403, 'session_forbidden', 'session belongs to another device');
       }
 
       const messages = body.messages.map((message, index) => {

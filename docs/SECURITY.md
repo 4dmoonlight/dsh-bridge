@@ -23,10 +23,26 @@ multi-tenant and it is **not** end-to-end encrypted.
   the server; this repo stores readable snapshots. Adding Noise IK (or the
   mobile plugin's HKDF/AES-GCM pairing scheme) is the main roadmap item before
   any public deployment.
-- **No pairing codes / QR flow.** Registration needs the instance token.
-- **No per-user scoping.** Every valid token can read every stored session.
-- **No audit log, rate limiting, or token expiry.** Device tokens live until
-  rotated by re-registering the same name.
+- **No end-to-end encryption between devices.** The hub sees plaintext.
+- **No per-device read scoping.** Every credential can read every stored session;
+  isolation is by device ownership of *writes*, not by visibility.
+- **No audit log.** Actions are not attributed to a person, only to a credential.
+- **No automatic token expiry.** Device credentials live until revoked.
+
+## What is enforced today
+
+- **Per-device credentials.** Pairing issues an opaque 32-byte token bound to a
+  server-assigned `device_id`, stored only as a SHA-256 digest. A device token
+  cannot claim another device's identity (`403 device_mismatch`).
+- **Session ownership is immutable.** A session belongs to the device that first
+  created it; another device syncing the same `session_id` gets `409
+  session_conflict` instead of silently taking it over.
+- **Only an admin credential can issue pairing codes.** A device token that is
+  stolen cannot pull more devices in.
+- **Pairing codes** are 6 digits, single-use, expire in 10 minutes, and the claim
+  endpoint is rate limited to 12 attempts per minute.
+- **No SQL injection surface:** every value goes through a prepared statement.
+- **On-disk hygiene:** data directory 0700, SQLite file 0600, config files 0600.
 
 ## Hardening checklist before exposing it
 

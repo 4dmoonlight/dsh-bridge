@@ -411,6 +411,11 @@ export function apply(ctx) {
           }
           config.hub_url = hubUrl
           config.hub_token = payload.token
+          // 服务端把凭据绑定到自己分配的 device_id。本地必须改用这个 id,
+          // 否则后续写入会因身份不一致被 device_mismatch 拒绝。
+          if (typeof payload.device_id === 'string' && payload.device_id) {
+            config.device_id = payload.device_id
+          }
           config.enabled = true
           writeJson(CONFIG_FILE, config)
           syncHubScope()

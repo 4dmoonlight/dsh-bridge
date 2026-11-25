@@ -231,7 +231,7 @@ public="http://127.0.0.1:$PORT"
 cat <<EOF
 
   hub URL:  $public
-  token:      $TOKEN
+  token:      (在 $ENV_FILE 里,不回显——终端录像和截图都会泄漏)
   env file:   $ENV_FILE (0600)
   data:       $DATA_DIR (hub-store.json, plaintext sessions)
   service:    systemctl status $SERVICE
@@ -239,7 +239,8 @@ cat <<EOF
   Next, on the Mac:
 
     git clone $REPO_URL && cd dsh-bridge
-    ./install.sh mac --hub $public --token $TOKEN --yes
+    sudo sed -n 's/^BRIDGE_TOKEN=//p' $ENV_FILE   # 需要时自己取
+    ./install.sh mac --hub $public --token <上面取到的值> --yes
 
   Treat the token as a password. It can read every stored session.
 EOF
