@@ -18,4 +18,7 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: RelaySync
         SWIFT_VERSION: "5.0"
         TARGETED_DEVICE_FAMILY: "1,2"
-        CODE_SIGNING_ALLOWED: NO
+        # 真机安装必须签名。用 Xcode 已为该 bundle id 建好的团队描述文件。
+        # 模拟器构建不受影响(模拟器不需要签名)。
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: SM76JGBSLP
