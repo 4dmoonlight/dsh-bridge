@@ -7,7 +7,10 @@ Instructions for coding agents that need to install, run, or extend
 
 Relay-mediated **session sync** for DeepSeek Harness on macOS:
 
-- `server/` — zero-dependency Node relay: session store + live command relay.
+- `apps/server/` — zero-dependency Node relay: session store, live command relay,
+  SQLite-backed cross-device API and a hand-written WebSocket.
+- `packages/dsh-cross-device/` — DSH plugin that publishes this machine's sessions
+  and renders other machines' sessions in the sidebar.
 - `apps/macos/` — Swift package: `relay-sync` CLI + SwiftUI window.
   Reads local DSH sessions (`~/.dsh/sessions`) and pushes/answers over HTTP.
 - scope: **session sync only**. No chat, no terminals, no file transfer, no E2E.
@@ -72,6 +75,9 @@ Never hand-edit `relay-store.json`; restart the relay and re-push instead.
 
 ```
 apps/server/src/app.js      routes + auth + error mapping
+apps/server/src/api-v1.js   /api/v1 cross-device API + pairing codes
+apps/server/src/db.js       SQLite schema (devices/sessions/messages/pairing_codes)
+apps/server/src/ws.js       hand-written RFC6455 server, 30s ping keepalive
 apps/server/src/store.js    JSON store, atomic writes, revision counter
 apps/server/src/relay.js    long-poll command relay, timeouts
 apps/server/src/events.js   SSE hub
@@ -80,6 +86,7 @@ apps/server/test/*.test.js  node:test suite (12 tests)
 apps/macos/Sources/RelaySyncKit/   models, client, DSHReader, SyncEngine, config
 apps/macos/Sources/RelaySyncCLI/   main.swift (CLI) + UI.swift (SwiftUI)
 apps/macos/Tests/                  XCTest suite
+packages/dsh-cross-device/         the plugin (lib/, cordis.patch.yml, scripts/install.sh)
 scripts/e2e.sh                     cross-component proof
 docs/PROTOCOL.md                   wire contract (relay/1)
 docs/ARCHITECTURE.md               data paths + comparison with references

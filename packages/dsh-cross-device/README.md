@@ -8,8 +8,8 @@
 ## 安装
 
 ```bash
-git clone https://github.com/4dmoonlight/dsh-cross-device.git
-cd dsh-cross-device
+git clone https://github.com/4dmoonlight/dsh-relay-sync.git
+cd dsh-relay-sync/packages/dsh-cross-device
 ./scripts/install.sh
 ```
 
