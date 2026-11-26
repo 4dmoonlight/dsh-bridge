@@ -13,13 +13,12 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { runInNewContext } from 'node:vm';
 import { createHubApp } from '../apps/server/src/app.js';
-import { call, INSTANCE_TOKEN, startHub } from '../apps/server/test/helpers.js';
+import { call, INSTANCE_TOKEN } from '../apps/server/test/helpers.js';
 
 const exec = promisify(execFile);
 const dsh = process.env.DSH_BIN || 'dsh';
 const pluginDir = fileURLToPath(new URL('../packages/dsh-cross-device/', import.meta.url));
 const localApi = '/api/cross-device/web';
-const googleMode = process.argv.includes('--google');
 const temp = await mkdtemp(join(tmpdir(), 'bridge-web-e2e-'));
 const children = [];
 let hub;
@@ -73,7 +72,6 @@ async function startGoogleHub() {
     dataDir: join(temp, 'hub'), instanceToken: INSTANCE_TOKEN, logger: { info() {}, error() {} },
     google: {
       clientId, clientSecret, redirectUri, allowedEmails: [email], fetch: fakeGoogle,
-      returnOrigins: ['https://viewer.bridge.test', 'https://target.bridge.test'],
     },
   });
   await app.listen(Number(new URL(origin).port), '127.0.0.1');
@@ -84,7 +82,7 @@ async function startGoogleHub() {
   } };
 }
 
-async function startDsh(name, authority, hubToken = '') {
+async function startDsh(name) {
   const home = join(temp, name);
   await mkdir(home);
   const dshHome = join(home, '.dsh');
@@ -98,13 +96,14 @@ async function startDsh(name, authority, hubToken = '') {
   await mkdir(dir, { mode: 0o700 });
   const configPath = join(dir, 'config.json');
   await writeFile(configPath, JSON.stringify({
-    device_name: name, device_id: 'sync-' + name, enabled: false, hub_url: hub.url, hub_token: hubToken,
+    device_name: name, device_id: 'sync-' + name, enabled: false, hub_url: hub.url,
   }), { mode: 0o600 });
 
   const port = await freePort();
-  const origin = 'https://' + authority;
-  const child = spawn(dsh, ['web', '--patch', overlay, '--no-open', '--host', '127.0.0.1', '--port', String(port),
-    '--public-url', origin + '/', '--trusted-host', authority], { env, cwd: home, stdio: ['ignore', 'pipe', 'pipe'] });
+  const authority = '127.0.0.1:' + port;
+  const origin = 'http://' + authority;
+  const child = spawn(dsh, ['web', '--patch', overlay, '--no-open', '--host', '127.0.0.1', '--port', String(port)],
+    { env, cwd: home, stdio: ['ignore', 'pipe', 'pipe'] });
   children.push(child);
   child.stdout.setEncoding('utf8');
   child.stderr.setEncoding('utf8');
@@ -123,7 +122,7 @@ async function startDsh(name, authority, hubToken = '') {
     let buffer = '';
     child.stdout.on('data', chunk => {
       buffer += chunk;
-      const match = /^dsh web: (https:\/\/[^\s]+)\s*$/m.exec(buffer);
+      const match = /^dsh web: (http:\/\/127\.0\.0\.1:[^\s]+)\s*$/m.exec(buffer);
       if (!match || !buffer.endsWith('\n')) return;
       clearTimeout(timer);
       child.stdout.removeAllListeners('data');
@@ -163,15 +162,15 @@ async function login(device) {
   return response.headers['set-cookie'][0].split(';', 1)[0];
 }
 
-function checkMux(device, cookie) {
+function openMux(device, cookie) {
   return new Promise((resolve, reject) => {
     const req = request({ hostname: '127.0.0.1', port: device.port, path: '/api/remote.mux', headers: {
       host: device.authority, origin: device.origin, cookie,
       connection: 'Upgrade', upgrade: 'websocket',
       'sec-websocket-version': '13', 'sec-websocket-key': randomBytes(16).toString('base64'),
     } });
-    req.once('upgrade', (res, socket) => { socket.destroy(); resolve(res.statusCode); });
-    req.once('response', res => { res.resume(); resolve(res.statusCode); });
+    req.once('upgrade', (res, socket) => { socket.on('error', () => {}); socket.resume(); resolve({ status: res.statusCode, socket }); });
+    req.once('response', res => { res.resume(); resolve({ status: res.statusCode }); });
     req.setTimeout(10_000, () => req.destroy(new Error('DSH WebSocket handshake timed out')));
     req.once('error', reject);
     req.end();
@@ -229,10 +228,19 @@ async function googleLogin(device, nativeCookie) {
   assert.equal((await api(device, nativeCookie + '; ' + flowCookie, '/google/complete', payload)).status, 403, 'grant cannot replay');
 }
 
+async function waitForPeer(device, cookie, predicate) {
+  for (let attempt = 0; attempt < 40; attempt++) {
+    const status = ok(await api(device, cookie, '/status'));
+    if (predicate(status)) return status;
+    await new Promise(resolve => setTimeout(resolve, 150));
+  }
+  throw new Error('Timed out waiting for device state');
+}
+
 try {
-  hub = googleMode ? await startGoogleHub() : await startHub();
-  const a = await startDsh('viewer', 'viewer.bridge.test', INSTANCE_TOKEN);
-  const b = await startDsh('target', 'target.bridge.test');
+  hub = await startGoogleHub();
+  const a = await startDsh('viewer');
+  const b = await startDsh('target');
   assert.equal((await api(a, undefined, '/status')).status, 401);
   const aCookie = await login(a);
   const bCookie = await login(b);
@@ -240,46 +248,83 @@ try {
   assert.equal((await http(a, localApi + '/status', {
     cookie: aCookie, headers: { 'x-cross-device': '1', origin: b.origin },
   })).status, 403);
-  assert.equal(ok(await api(a, aCookie, '/status')).can_enroll, true);
-  ok(await api(a, aCookie, '/enroll', {}));
+  await googleLogin(a, aCookie);
+  await googleLogin(b, bCookie);
   assert.equal((await stat(a.configPath)).mode & 0o777, 0o600);
-  if (googleMode) {
-    await googleLogin(a, aCookie); // upgrade an existing Web credential
-    await googleLogin(b, bCookie); // new device, no invite or sync token
-  } else {
-    const invitation = ok(await api(a, aCookie, '/pairing/code', {}));
-    ok(await api(b, bCookie, '/pairing/claim', { hub_url: hub.url, code: invitation.code }));
-  }
+  assert.equal((await api(b, bCookie, '/pairing/code', {})).status, 404);
   const unrelated = await call(hub.url, '/api/v1/devices/heartbeat', {
     method: 'POST', body: { device_id: 'unrelated', device_name: 'Not paired', platform: 'macos' },
   });
   assert.equal(unrelated.status, 200);
-  assert.equal((await api(b, bCookie, '/presence', { web_url: 'https://other.bridge.test' })).status, 409);
-  ok(await api(b, bCookie, '/presence', { web_url: b.origin }));
-  const { devices } = ok(await api(a, aCookie, '/status'));
+  const { devices } = await waitForPeer(a, aCookie, value => value.devices[0]?.status === 'online');
   assert.equal(devices.length, 1);
   const [peer] = devices;
   assert.equal(peer.device_name, 'target');
-  assert.equal(peer.status, 'online');
-  assert.equal(peer.web_enabled, true);
-  assert.equal(Object.keys(peer).sort().join(','), 'device_id,device_name,status,web_enabled');
+  assert.equal(peer.web_enabled, false);
+  assert.equal(ok(await api(b, bCookie, '/status')).remote_control_enabled, false);
   const target = { device_id: peer.device_id };
+  assert.equal((await api(a, aCookie, '/open', target)).status, 409);
+
+  ok(await api(b, bCookie, '/control', { enabled: true }));
+  await waitForPeer(b, bCookie, value => value.control_ready === true);
+  await waitForPeer(a, aCookie, value => value.devices[0]?.web_enabled === true);
   const entry = new URL(ok(await api(a, aCookie, '/open', target)).entry_url);
-  assert.equal(entry.href, b.origin + '/dsh-bridge-enter');
-  const handoff = await http(b, entry.pathname);
-  assert.equal(handoff.status, 200);
-  assert.match(handoff.text, /url=\.\//);
-  assert.equal((await http(b, '/')).status, 401, 'the handoff must not bypass DSH login');
-  const original = await http(b, '/', { cookie: bCookie });
+  assert.equal(entry.protocol, 'http:');
+  assert.match(entry.hostname, /^[a-f0-9]{32}\.dsh-relay\.localhost$/);
+  assert.equal(entry.pathname, '/dsh-relay-enter');
+  assert.match(entry.hash, /^#[A-Za-z0-9_-]{43}$/);
+  assert.equal(entry.search, '');
+  assert.notEqual(entry.origin, b.origin);
+  const view = { origin: entry.origin, authority: entry.host, port: Number(entry.port) };
+  assert.equal((await http(view, '/')).status, 401, 'unclaimed view is not authenticated');
+  const page = await http(view, entry.pathname, { headers: { 'sec-fetch-site': 'cross-site' } });
+  assert.equal(page.status, 200, 'one-click handoff is served through the relay');
+  const [_, handoffScript] = /<script>([^]*?)<\/script>/.exec(page.text);
+  const body = { grant: entry.hash.slice(1) };
+  let browserCookie, cleared = false;
+  await new Promise((resolve, reject) => {
+    runInNewContext(handoffScript, {
+      history: { replaceState: (_state, _title, route) => { assert.equal(route, entry.pathname); cleared = true; } },
+      location: { hash: entry.hash, replace(route) { assert.equal(route, '/'); resolve(); } },
+      document: { getElementById: () => ({ set textContent(_) { reject(new Error('one-click browser handoff failed')); } }) },
+      fetch: async (route, init) => {
+        try {
+          assert.ok(cleared, 'remove the capability from the URL before calling the handoff endpoint');
+          assert.equal(route, entry.pathname);
+          assert.equal(init.method, 'POST');
+          assert.deepEqual(JSON.parse(init.body), body);
+          const result = await http(view, route, { method: init.method, body: JSON.parse(init.body),
+            headers: { origin: view.origin, 'sec-fetch-site': 'same-origin' } });
+          assert.equal(result.status, 204, 'one-click handoff must authenticate');
+          browserCookie = result.headers['set-cookie'][0].split(';', 1)[0];
+          return { ok: true };
+        } catch (error) { reject(error); throw error; }
+      },
+    });
+  });
+  assert.notEqual(browserCookie, bCookie, 'native session cookie stays on target');
+  assert.equal((await http(view, entry.pathname, { method: 'POST', body, headers: { origin: view.origin } })).status, 401, 'entry grant cannot be replayed');
+  assert.equal((await http(view, localApi + '/status', { cookie: browserCookie })).status, 404);
+  const original = await http(view, '/', { cookie: browserCookie });
   assert.equal(original.status, 200);
   assert.ok(/__DSH_BOOT__/.test(original.text), 'expected a native DSH boot payload');
   assert.ok(original.text.includes('dsh-cross-device/client.js'), 'expected the target Web plugin bundle');
-  assert.equal(await checkMux(b, bCookie), 101, 'expected the target native authenticated WebSocket');
-  ok(await api(a, aCookie, '/unpair', target));
-  assert.deepEqual(ok(await api(a, aCookie, '/status')).devices, []);
-  assert.deepEqual(ok(await api(b, bCookie, '/status')).devices, []);
-  assert.equal((await api(a, aCookie, '/open', target)).status, 404);
-  console.log((googleMode ? 'Google Web' : 'Invitation Web') + ' E2E OK: paired-only list, original authenticated DSH Web, unpair blocks new opens');
+  const active = await openMux(view, browserCookie);
+  assert.equal(active.status, 101, 'expected the original DSH WebSocket over relay');
+  assert.ok(active.socket);
+  const closedStream = once(active.socket, 'close');
+  ok(await api(b, bCookie, '/control', { enabled: false }));
+  let closeTimer;
+  try {
+    await Promise.race([closedStream, new Promise((_, reject) => {
+      closeTimer = setTimeout(() => { active.socket.destroy(); reject(new Error('revoked WS did not close')); }, 5000);
+    })]);
+  } finally { clearTimeout(closeTimer); }
+  await waitForPeer(a, aCookie, value => value.devices[0]?.web_enabled === false);
+  assert.equal((await api(a, aCookie, '/open', target)).status, 409);
+  const staleView = await http(view, '/', { cookie: browserCookie }).catch(() => ({ status: 503 }));
+  assert.notEqual(staleView.status, 200, 'old relay view cannot reconnect after revocation');
+  console.log('Relay Web E2E OK: Google discovery, one-click native DSH and WebSocket, immediate revocation');
 } finally {
   await Promise.all(children.map(async child => {
     if (child.exitCode !== null || child.signalCode !== null) return;

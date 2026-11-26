@@ -1,6 +1,6 @@
 # dsh-cross-device
 
-在 **DeepSeek Harness** 的「跨设备」只列出直接配对的远端设备。点击在线设备，在新标签页打开它实际运行的 DSH Web（插件、侧栏、工作区和会话）。不镜像屏幕，不在本机重画会话界面。
+在 **DeepSeek Harness** 的「跨设备」可找到登录同一 Google 账号的设备。点击在线且允许远程控制的设备，在新标签页打开它实际运行的 DSH Web（插件、侧栏、工作区和会话）。不镜像屏幕，不在本机重画会话界面。
 
 配套服务端:[dsh-bridge](https://github.com/4dmoonlight/dsh-bridge)。
 
@@ -18,7 +18,7 @@ cd dsh-bridge/packages/dsh-cross-device
 DSH_PROFILE=~/.dsh/profiles/desktop ./scripts/install.sh
 ```
 
-需要带 `--public-url` 和 `--trusted-host` 支持的 DSH Web（已用 0.2.2-rc.5 验证）。**重启 DSH 生效**，侧边栏会出现 `⇄` 图标。
+需要支持 Web 的 DSH（已用 0.2.2-rc.5 验证）；使用默认回环监听即可。**重启 DSH 生效**，侧边栏会出现 `⇄` 图标。
 
 ## 配置
 
@@ -34,15 +34,15 @@ DSH_PROFILE=~/.dsh/profiles/desktop ./scripts/install.sh
 }
 ```
 
-以上是原有会话同步配置；不要把实例令牌分发给其他设备。启用 Google 登录只需在 Hub 配一次 OAuth，之后两台机器在「跨设备」用同一个 Google 账号登录即可，无需实例令牌和邀请码。也可退回 Web 邀请码；旧的六位会话同步码（含 iOS）继续可用，但不授予 Web 入口。
+以上是原有会话同步配置；不要把实例令牌分发给其他设备。启用 Google 登录只需在 Hub 配一次 OAuth，之后两台机器在「跨设备」用同一个 Google 账号登录即可，无需实例令牌和邀请码。新面板不显示任何配对码。旧的会话同步接口（含 iOS）仍保留兼容，不授予远程打开权限。
 
 ### 打开原版 DSH Web
 
-1. 更新 Hub 和两边的插件。在「跨设备」用同一个 Google 账号登录，或使用 Web 邀请码配对。
-2. 在远端配置可达的私有 HTTPS 入口，启动 DSH Web 时通过 `--public-url` 和 `--trusted-host` 公告该入口。只接受独立 HTTPS 根地址，不填带 `?token=` 的启动链接；远端 DSH 仍可保持回环监听。
-3. 在远端插件启用该地址。查看端浏览器首次先登录此 HTTPS 地址上的 DSH；随后点已配对的在线设备即可进入原版页面。
+1. 更新 Hub 和两边的插件。在「跨设备」用同一个 Google 账号登录。
+2. 在被控电脑的本机 DSH 页面打开「允许远程控制本机」（默认关闭）。
+3. 另一台电脑点「打开 Web」即可。不必配置被控机的 HTTPS 地址或入站端口。
 
-Hub 不代理网页、不代登录。解绑只撤销插件入口，不会使已经登录的 DSH 自动退出。详见 [Web 接入说明](../../docs/WEB-ACCESS.md)。
+关闭开关会断开中转访问。受控范围是目标 DSH Web，不是屏幕共享。详见 [Web 接入说明](../../docs/WEB-ACCESS.md)。
 
 ## 卸载
 

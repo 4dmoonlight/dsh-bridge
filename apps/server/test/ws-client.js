@@ -72,8 +72,12 @@ function readHandshake(socket, timeoutMs) {
         const colon = line.indexOf(':');
         if (colon > 0) headers[line.slice(0, colon).trim().toLowerCase()] = line.slice(colon + 1).trim();
       }
+      const status = Number(statusLine?.[1] ?? 0);
+      const length = status === 101 ? 0 : Number(headers['content-length'] ?? 0);
+      if (rest.length < length) return;
       cleanup();
-      resolve({ status: Number(statusLine?.[1] ?? 0), headers, rest });
+      const body = length ? rest.subarray(0, length).toString('utf8') : null;
+      resolve({ status, headers, rest, body });
     };
     const onError = (error) => {
       cleanup();
@@ -86,7 +90,8 @@ function readHandshake(socket, timeoutMs) {
 
 /**
  * @param {string} baseUrl
- * @param {{token?: string, deviceId?: string, headers?: Record<string,string>, query?: string, timeoutMs?: number}} [options]
+ * @param {{token?: string, deviceId?: string, headers?: Record<string,string>, query?: Record<string,string>,
+ *   timeoutMs?: number, requestTarget?: string, autoPong?: boolean}} [options]
  */
 export async function openWebSocket(baseUrl, options = {}) {
   const url = new URL('/api/v1/ws', baseUrl);
@@ -104,7 +109,7 @@ export async function openWebSocket(baseUrl, options = {}) {
 
   const extra = Object.entries(options.headers ?? {}).map(([name, value]) => `${name}: ${value}`);
   const request = [
-    `GET ${url.pathname}${url.search} HTTP/1.1`,
+    `GET ${options.requestTarget ?? (url.pathname + url.search)} HTTP/1.1`,
     `Host: ${url.host}`,
     'Upgrade: websocket',
     'Connection: Upgrade',
@@ -122,6 +127,7 @@ export async function openWebSocket(baseUrl, options = {}) {
     const error = new Error(`WebSocket handshake failed with ${result.status}`);
     error.status = result.status;
     error.headers = result.headers;
+    error.body = result.body ? JSON.parse(result.body) : null;
     throw error;
   }
   if (result.headers['sec-websocket-accept'] !== websocketAccept(key)) {

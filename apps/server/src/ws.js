@@ -69,12 +69,13 @@ export function encodeFrame(opcode, payload = Buffer.alloc(0), options = {}) {
  * incomplete; throws WsFrameError for protocol violations (including frames
  * larger than 1 MiB, which must be rejected before buffering their payload).
  * @param {Buffer | Uint8Array} buffer
- * @param {{requireMask?: boolean}} [options]
+ * @param {{requireMask?: boolean, maxPayloadBytes?: number}} [options]
  * @returns {{frame: {fin: boolean, opcode: number, payload: Buffer}, rest: Buffer} | null}
  */
 export function parseFrame(buffer, options = {}) {
   const data = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
   const requireMask = options.requireMask ?? true;
+  const maxPayloadBytes = options.maxPayloadBytes ?? MAX_FRAME_BYTES;
   if (data.length < 2) return null;
 
   const first = data[0];
@@ -102,11 +103,11 @@ export function parseFrame(buffer, options = {}) {
   } else if (length === 127) {
     if (data.length < 10) return null;
     const wide = data.readBigUInt64BE(2);
-    if (wide > BigInt(MAX_FRAME_BYTES)) throw new WsFrameError('frame exceeds 1 MiB', 1009);
+    if (wide > BigInt(maxPayloadBytes)) throw new WsFrameError(frameLimitReason(maxPayloadBytes), 1009);
     length = Number(wide);
     offset = 10;
   }
-  if (length > MAX_FRAME_BYTES) throw new WsFrameError('frame exceeds 1 MiB', 1009);
+  if (length > maxPayloadBytes) throw new WsFrameError(frameLimitReason(maxPayloadBytes), 1009);
   if (requireMask && !masked) throw new WsFrameError('client frames must be masked');
 
   const maskOffset = offset;
@@ -123,6 +124,10 @@ export function parseFrame(buffer, options = {}) {
   }
 
   return { frame: { fin, opcode, payload }, rest: data.subarray(offset + length) };
+}
+
+function frameLimitReason(limit) {
+  return limit === MAX_FRAME_BYTES ? 'frame exceeds 1 MiB' : 'frame exceeds configured limit';
 }
 
 /**
@@ -165,6 +170,40 @@ export function rejectUpgrade(socket, status, code, message, extraHeaders = {}) 
   }
 }
 
+/** Complete the common RFC 6455 handshake. Relay opts into canonical key validation. */
+export function acceptHandshake(req, socket, { strictKey = false } = {}) {
+  if ((req.method ?? 'GET').toUpperCase() !== 'GET') {
+    rejectUpgrade(socket, 405, 'method_not_allowed', 'WebSocket handshake must use GET');
+    return false;
+  }
+  const upgrade = String(req.headers.upgrade ?? '').toLowerCase();
+  const connection = String(req.headers.connection ?? '').toLowerCase();
+  if (upgrade !== 'websocket' || !connection.split(/\s*,\s*/).includes('upgrade')) {
+    rejectUpgrade(socket, 400, 'invalid_handshake', 'WebSocket Upgrade headers required');
+    return false;
+  }
+  const version = req.headers['sec-websocket-version'];
+  if (String(version ?? '') !== '13') {
+    rejectUpgrade(socket, 426, 'unsupported_websocket_version', 'Sec-WebSocket-Version must be 13', {
+      'sec-websocket-version': '13',
+    });
+    return false;
+  }
+  const key = req.headers['sec-websocket-key'];
+  if (typeof key !== 'string' || !key.trim() || (strictKey && !/^[A-Za-z0-9+/]{21}[AQgw]==$/.test(key))) {
+    rejectUpgrade(socket, 400, 'invalid_handshake', 'Sec-WebSocket-Key required');
+    return false;
+  }
+
+  const response =
+    'HTTP/1.1 101 Switching Protocols\r\n' +
+    'Upgrade: websocket\r\n' +
+    'Connection: Upgrade\r\n' +
+    `Sec-WebSocket-Accept: ${acceptKey(key.trim())}\r\n\r\n`;
+  socket.write(response);
+  return true;
+}
+
 /**
  * In-memory WebSocket hub. Connections are double-indexed: a set for broadcasts
  * and a device_id -> set map so a specific device can be addressed later.
@@ -199,35 +238,7 @@ export class WebSocketHub {
       rejectUpgrade(socket, 503, 'server_closed', 'hub is shutting down');
       return false;
     }
-    if ((req.method ?? 'GET').toUpperCase() !== 'GET') {
-      rejectUpgrade(socket, 405, 'method_not_allowed', 'WebSocket handshake must use GET');
-      return false;
-    }
-    const upgrade = String(req.headers.upgrade ?? '').toLowerCase();
-    const connection = String(req.headers.connection ?? '').toLowerCase();
-    if (upgrade !== 'websocket' || !connection.split(/\s*,\s*/).includes('upgrade')) {
-      rejectUpgrade(socket, 400, 'invalid_handshake', 'WebSocket Upgrade headers required');
-      return false;
-    }
-    const version = req.headers['sec-websocket-version'];
-    if (String(version ?? '') !== '13') {
-      rejectUpgrade(socket, 426, 'unsupported_websocket_version', 'Sec-WebSocket-Version must be 13', {
-        'sec-websocket-version': '13',
-      });
-      return false;
-    }
-    const key = req.headers['sec-websocket-key'];
-    if (typeof key !== 'string' || !key.trim()) {
-      rejectUpgrade(socket, 400, 'invalid_handshake', 'Sec-WebSocket-Key required');
-      return false;
-    }
-
-    const response =
-      'HTTP/1.1 101 Switching Protocols\r\n' +
-      'Upgrade: websocket\r\n' +
-      'Connection: Upgrade\r\n' +
-      `Sec-WebSocket-Accept: ${acceptKey(key.trim())}\r\n\r\n`;
-    socket.write(response);
+    if (!acceptHandshake(req, socket)) return false;
 
     const conn = new WebSocketConnection(this, socket, options.deviceId);
     this.connections.add(conn);

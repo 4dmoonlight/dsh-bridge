@@ -49,7 +49,7 @@ cd dsh-bridge
 
 ## 在浏览器打开远端 DSH
 
-更新 Hub 和两台电脑的插件后，可在「跨设备」用同一个 Google 账号登录，设备会自动关联，不用复制邀请码。远端 DSH 仍需可达、受保护的独立 HTTPS 地址，并保留原有登录。开启分享后，点击在线设备打开远端的插件、侧栏和会话，不镜像屏幕。见 [Google 登录和远端 Web 配置](docs/WEB-ACCESS.md)。
+更新 Hub 和两台电脑的插件后，在「跨设备」用同一个 Google 账号登录。在被控电脑开启「允许远程控制本机」后，就能从另一台一键打开实际运行的 DSH Web。开关默认关闭，不需要分别配置 HTTPS 地址或 Web 配对码，不镜像屏幕。见 [Google 登录和远端 Web 配置](docs/WEB-ACCESS.md)。
 
 ## 命令
 
@@ -90,15 +90,14 @@ BRIDGE_PORT=8787 BRIDGE_DATA_DIR=~/.dsh-bridge/hub-data \
 node --test packages/dsh-cross-device/test/*.test.js  # 设备面板
 (cd apps/macos && swift test)  # 模型、配置、DSH v4 解析
 bash scripts/e2e.sh           # 原生客户端的 live 与 stored 路径
-node scripts/e2e-web.mjs      # 需 dsh CLI；使用隔离的双 Web 实例和测试 Hub
-node scripts/e2e-web.mjs --google  # 签名模拟 Google，不使用真实账号
+node scripts/e2e-web.mjs      # 需 dsh CLI；本地双实例、模拟 Google 和中转
 ```
 
 ## 已知边界
 
-- 会话同步不传终端、文件、附件、模型配置；远端 Web 不经过 Hub 转发。
+- 老会话同步不传终端、文件、附件或模型配置。远程 DSH Web 可以使用 DSH 本身开放的能力，网页流量通过 Hub 加密转发。
 - 会话同步是单租户：合法的会话同步令牌可读全部会话；Web 设备令牌不能读取这些会话。
-- 无端到端加密；服务端存明文快照（有上限：每会话 2000 条消息 / 单条 2 万字符）。
+- 会话同步快照不加密，服务端存明文（有上限：每会话 2000 条消息 / 单条 2 万字符）。
 - 单进程存储（JSON 原子替换）；不要多实例共享同一目录。
 - macOS 宿主和 iOS 客户端继续使用会话同步协议；Web 配对是单独的授权。
 

@@ -47,6 +47,16 @@ export class WebDb {
         LEFT JOIN web_google_bindings AS binding USING (device_id)
         WHERE device.device_id = ?
       `),
+      lookupRelayIdentity: database.prepare(`
+        SELECT device_id, subject_hash FROM web_devices
+        LEFT JOIN web_google_bindings USING (device_id) WHERE token_hash = ?
+      `),
+      listGoogleDevices: database.prepare(`
+        SELECT device_id, device_name, last_seen_at
+        FROM web_google_bindings JOIN web_devices USING (device_id)
+        WHERE subject_hash = ? AND device_id <> ?
+        ORDER BY device_name, device_id
+      `),
       bindGoogle: database.prepare('INSERT INTO web_google_bindings (device_id, subject_hash) VALUES (?, ?)'),
       pairGoogleDevices: database.prepare(`
         INSERT INTO web_pairs (first_device_id, second_device_id)
@@ -124,6 +134,23 @@ export class WebDb {
 
   findDeviceId(token) {
     return this.statements.lookupDevice.get(sha256(token))?.device_id ?? null;
+  }
+
+  lookupRelayIdentity(token) {
+    return this.statements.lookupRelayIdentity.get(sha256(token)) ?? null;
+  }
+
+  findGoogleSubject(deviceId) {
+    return this.statements.findGoogleBinding.get(deviceId)?.subject_hash ?? null;
+  }
+
+  listGoogleDevices(subjectHash, excludingDeviceId) {
+    const now = this.now();
+    return this.statements.listGoogleDevices.all(subjectHash, excludingDeviceId).map((row) => ({
+      device_id: row.device_id,
+      device_name: row.device_name,
+      status: statusAt(row.last_seen_at, now),
+    }));
   }
 
   issueCode(issuerId) {

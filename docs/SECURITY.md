@@ -58,14 +58,23 @@ multi-tenant and it is **not** end-to-end encrypted.
   Google tokens are not stored. The Hub issues a short-lived grant that is
   delivered to the viewing DSH browser and redeemed with a server-held verifier
   and browser binding. The Hub never transfers a Web credential in a URL.
-- Web addresses are explicitly advertised by the target, credential-free HTTPS
-  roots, and returned only to a directly paired device when that target is
-  online. The Hub does not fetch those addresses or handle their cookies or traffic.
-- The plugin's exact API routes require same-origin DSH owner admission. Ordinary
-  page and API access on the target uses native DSH authentication. Use an
-  access-controlled HTTPS endpoint, never a publicly bound DSH HTTP port.
-- Unpairing blocks subsequent list/open requests for that device, not DSH login
-  cookies already issued independently. See [Web access setup](WEB-ACCESS.md).
+- The current Web relay requires verified equal Google subjects, not an older
+  invitation or a claimed email. The target only accepts new relay streams while
+  its opt-in is active and destroys all of them when disabled or disconnected.
+- The viewing browser connects to a temporary loopback port and a fresh
+  per-view hostname under .localhost for browser cookie isolation. The two plugins
+  communicate over TLS inside outbound relay WebSockets. The Hub sees identity
+  and routing metadata and vouches for the target certificate fingerprint; it
+  does not receive the browser entry proof, DSH cookies or plaintext page traffic
+  in normal operation. The Hub itself is part of the trusted control plane.
+- The plugin requires same-origin DSH owner admission and local loopback for the
+  control switch. The relay gates every browser request, forwards only to the
+  target's fixed DSH listener and blocks the target's Cross-device settings
+  and login-grant endpoints. The viewing device can still perform DSH owner
+  actions for enabled features; the switch is not an OS sandbox.
+- Revoking access closes both HTTP and upgraded streams, but does not undo DSH
+  actions already taken or revoke separate direct access. The older direct-URL
+  API is retained for backward compatibility. See [Web access setup](WEB-ACCESS.md).
 
 ## Hardening checklist before exposing it
 

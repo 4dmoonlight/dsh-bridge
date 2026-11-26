@@ -135,7 +135,7 @@ Only the newest poll for a device receives commands; a new poll cancels the old 
 | 502 | `host_error` (or the host's own code) |
 | 504 | `host_timeout` |
 
-## Web device pairing (additive)
+## Legacy Web pairing and direct links (compatibility)
 
 These endpoints are not used by the macOS or iOS clients and do not alter the
 existing session credentials, pairing codes, or sidebar. Web credentials bind
@@ -156,10 +156,10 @@ joins an entire group nor grants a session-sync credential.
 Success is HTTP 200. A missing/invalid Web credential is 401, an unpaired target
 is 404, and an offline (heartbeat older than 60 s) or unpublished Web target is
 409. The device list never carries URLs, credentials, or sessions. The Hub
-returns an entry address only; it does not serve/proxy the target DSH or manage
-its login. See [Web access setup](WEB-ACCESS.md).
+returns an entry address only on these legacy endpoints. New plugins do not use
+Web enrollment codes or direct address publication. See [Web access setup](WEB-ACCESS.md).
 
-### Google sign-in for Web devices (optional)
+### Google sign-in for Web devices
 
 All paths below are under `/api/v1/web/google`. These routes neither replace
 the invitation endpoints nor authenticate to native DSH.
@@ -175,7 +175,29 @@ The DSH host keeps the local verifier, requires native owner access and a
 browser-bound flow cookie to complete sign-in, and stores any new Web token
 itself. First association pairs the device with other devices having the
 same verified Google subject. Reauthenticating an already-bound device does
-not restore a removed edge. [Configuration](WEB-ACCESS.md#google-sign-in-recommended).
+not restore a removed edge in the legacy APIs. [Configuration](WEB-ACCESS.md#hub-setup-enable-google-sign-in).
+
+## Web relay (additive)
+
+HTTPS routes use the Web Bearer credential of a Google-bound device:
+
+| Route | Body or result |
+| --- | --- |
+| GET /api/v1/web/relay/devices | {devices, control_ready}; other devices with the same Google subject, with online and opt-in state |
+| POST /api/v1/web/relay/open | {device_id, authority, grant_hash} → {lease_id, fingerprint, expires_at} |
+| POST /api/v1/web/relay/close | {lease_id} → {closed}; idempotently releases the authenticated viewer’s lease |
+
+There is one outbound control socket per opted-in target, and two outbound
+socket legs per active data connection, at the exact upgrade path
+`/api/v1/web/relay`. Initial frames are `host` (fingerprint), `viewer`
+(lease_id), or `join` (connection_id), each with the device token in the first
+WSS message, never in a URL. The Hub validates the Google binding and lease.
+The authority is a fresh 32-hex-character hostname under .dsh-relay.localhost
+plus the temporary loopback port. A lease is bound to the current target
+control socket and to the requesting Web device. It is memory-only and expires or is revoked when the control
+socket closes. The control socket receives only routing information, not the
+entry grant. Browser traffic is carried by a separate TLS session across the
+two data socket legs, using bounded base64 chunks and flow-control acknowledgments.
 
 ## Versioning
 

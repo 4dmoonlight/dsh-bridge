@@ -17,7 +17,7 @@ import { createHubClient } from './hub-client.js'
 import { registerWebAccess } from './web-access.js'
 
 export const name = 'dsh-cross-device'
-export const inject = ['webServer', 'connection', 'webApp']
+export const inject = ['webServer', 'connection']
 
 const STATE_DIR = join(homedir(), '.dsh', 'cross-device')
 const CONFIG_FILE = join(STATE_DIR, 'config.json')

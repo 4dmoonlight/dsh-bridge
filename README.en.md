@@ -63,10 +63,10 @@ GUI: `~/.local/bin/dsh-bridge ui`.
 ## Open remote DSH in the browser
 
 Update the Hub and the plugin on both computers, then sign into Cross-device
-with the same Google account to pair without an invitation. Give the target a
-reachable, protected HTTPS origin and enable sharing. Clicking an online
-device opens its own plugins, sidebar and sessions using its normal DSH login.
-It does not mirror a window. See [Google sign-in and Web setup](docs/WEB-ACCESS.md).
+with the same Google account. Turn on remote control on the target: it is off
+by default. Click the target device to open its DSH Web, with its own plugins,
+sidebar and sessions. There is no per-device HTTPS address, Web pairing code,
+or desktop mirror. See [Google sign-in and Web setup](docs/WEB-ACCESS.md).
 
 ## Commands
 
@@ -108,17 +108,17 @@ See [docs/INSTALL.md](docs/INSTALL.md).
 node --test packages/dsh-cross-device/test/*.test.js  # device panel
 (cd apps/macos && swift test)  # models, config, DSH v4 parsing
 bash scripts/e2e.sh           # native client live and stored paths
-node scripts/e2e-web.mjs      # requires the dsh CLI; isolated Web profiles and test Hub
-node scripts/e2e-web.mjs --google  # signed Google fixture, no real account
+node scripts/e2e-web.mjs      # requires the dsh CLI; two local profiles, simulated Google and relay
 ```
 
 ## Limits
 
-- Session sync does not transfer terminals, files, attachments, or model
-  configuration. The Hub does not proxy remote Web traffic.
+- Legacy session sync does not transfer terminals, files, attachments or model
+  settings. Remote DSH Web uses the capabilities DSH provides; Web traffic
+  goes through the Hub encrypted.
 - Session sync is single-tenant: every valid sync token reads every stored
   session. Web-device credentials do not grant this access.
-- No end-to-end encryption; the hub stores plaintext snapshots (2000 messages
+- Session-sync snapshots are stored in plaintext (2000 messages
   per session, 20k chars per message).
 - Single-process storage (atomic JSON replace); never share a data dir between
   instances.

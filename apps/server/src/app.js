@@ -7,6 +7,7 @@ import { openDatabase } from './db.js';
 import { WebSocketHub } from './ws.js';
 import { createApiV1 } from './api-v1.js';
 import { createWebApi, WEB_API_PATH } from './web-api.js';
+import { WebRelay, RELAY_PATH } from './web-relay.js';
 import { createGoogleOAuth, GOOGLE_API_PATH } from './google-oauth.js';
 import { HttpError, PROTOCOL, nowIso, readJson, safeEqual, sendEmpty, sendJson } from './util.js';
 
@@ -24,6 +25,8 @@ export const VERSION = '0.1.0';
  *   wsPingIntervalMs?: number,
  *   wsPongTimeoutMs?: number,
  *   google?: import('./google-oauth.js').GoogleOptions,
+ *   relay?: {leaseTtlMs?: number, authTimeoutMs?: number, joinTimeoutMs?: number, ackTimeoutMs?: number,
+ *     pingIntervalMs?: number, pongTimeoutMs?: number},
  * }} options
  */
 export async function createHubApp(options) {
@@ -43,6 +46,7 @@ export async function createHubApp(options) {
   });
   const api = createApiV1({ db, ws, instanceToken: options.instanceToken, bodyLimit });
   const handleWeb = createWebApi({ db: db.web, instanceToken: options.instanceToken, bodyLimit });
+  const relay = new WebRelay({ ...options.relay, db: db.web, bodyLimit });
   const handleGoogle = createGoogleOAuth({ google: options.google, db: db.web, bodyLimit });
   const startedAt = Date.now();
   let closed = false;
@@ -52,7 +56,7 @@ export async function createHubApp(options) {
   });
   server.on('upgrade', (req, socket, head) => {
     try {
-      api.handleUpgrade(req, socket, head);
+      if (!relay.handleUpgrade(req, socket, head)) api.handleUpgrade(req, socket, head);
     } catch (error) {
       logger.error?.(error);
       socket.destroy();
@@ -114,6 +118,7 @@ export async function createHubApp(options) {
     }
 
     // The Web plane never falls back to sync routes or their authentication.
+    if (path === RELAY_PATH || path.startsWith(RELAY_PATH + '/')) return relay.handleHttp(req, res, url);
     if (path === WEB_API_PATH || path.startsWith(WEB_API_PATH + '/')) {
       return handleWeb(req, res, { url, path, method });
     }
@@ -354,6 +359,7 @@ export async function createHubApp(options) {
       // Close upgraded sockets first: server.close() waits for connections it
       // knows about, but WebSocket tunnels are not tracked by the HTTP server.
       ws.close();
+      relay.close();
       await new Promise((resolve) => server.close(() => resolve(undefined)));
       db.close();
     },

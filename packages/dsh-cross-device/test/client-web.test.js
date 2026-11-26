@@ -6,7 +6,10 @@ import { runInNewContext } from 'node:vm'
 const source = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
 const prefix = '/api/cross-device'
 const localOrigin = 'https://local.example'
-const entry = 'https://remote.example/dsh-bridge-enter'
+const entrySecret = 'mock-relay-secret_'.padEnd(43, 'A')
+const entryHost = '11111111111111111111111111111111.dsh-relay.localhost'
+const entryRoot = 'http://' + entryHost + ':59182/dsh-relay-enter'
+const entry = entryRoot + '#' + entrySecret
 const googleStart = '/web/google/start'
 const googleEndpoint = 'https://accounts.google.com/o/oauth2/v2/auth'
 const googleAuthorization = googleEndpoint + '?' + new URLSearchParams({
@@ -14,9 +17,13 @@ const googleAuthorization = googleEndpoint + '?' + new URLSearchParams({
   redirect_uri: 'https://hub.example/api/v1/web/google/callback', state: 'opaque-oauth-state'.padEnd(43, 's'),
   nonce: 'n'.repeat(43), code_challenge: 'c'.repeat(43), code_challenge_method: 'S256',
 })
-const invite = '0123456789abcdefABCDEF_-'
 const peer = { device_id: 'peer', device_name: '远程设备', status: 'online', web_enabled: true }
-const status = (overrides = {}) => ({ hub_url: 'https://hub.example/', device_name: '本机设备', joined: true, can_enroll: false, web_url: null, devices: [peer], ...overrides })
+const status = (overrides = {}) => ({
+  hub_url: 'https://hub.example/', joined: true, login_provider: 'google', web_error: null,
+  remote_control_enabled: false, control_ready: false, devices: [peer], ...overrides,
+})
+const signedOut = (overrides = {}) => status({ joined: false, login_provider: null, devices: [], ...overrides })
+const hubLabel = '中继地址（Hub）'
 const deferred = () => { let resolve; const promise = new Promise((done) => { resolve = done }); return { resolve, promise } }
 
 function mount(t, route, options = {}) {
@@ -87,13 +94,13 @@ function mount(t, route, options = {}) {
     assert.equal(timers.size, 0)
     assert.equal(listeners.size, 0)
     for (const { url, path, init, body } of requests) {
-      assert.match(url, /^\/api\/cross-device\/(?:web\/|config$|pairing\/)/)
+      assert.match(url, /^\/api\/cross-device\/web\/(?:status|control|open|google\/start)$/)
       assert.equal(init.headers['x-cross-device'], '1')
       assert.equal(init.mode, 'same-origin')
       assert.equal(init.credentials, 'same-origin')
       assert.equal(init.redirect, 'error')
       assert.equal(init.cache, 'no-store')
-      assert.equal(init.referrerPolicy, path === googleStart ? 'origin' : undefined)
+      assert.equal(init.referrerPolicy, path === googleStart || path === '/web/control' ? 'origin' : undefined)
       assert.equal(init.headers.authorization, undefined)
       if (init.method === 'POST') {
         assert.equal(init.headers['content-type'], 'application/json')
@@ -115,14 +122,10 @@ const nodes = (tree, type) => tree && typeof tree === 'object' ? [...(tree.type 
 const button = (tree, label) => nodes(tree, 'button').find((node) => text(node) === label || node.props['aria-label'] === label)
 const open = (tree) => button(tree, '在新标签页打开 远程设备 的 DSH Web')
 const google = (tree) => button(tree, '使用 Google 登录')
-const detailsWith = (tree, label) => nodes(tree, 'details').find((node) => text(nodes(node, 'summary')[0]) === label)
 const input = (tree, label) => nodes(tree, 'label').find((node) => node.children[0] === label)?.children.find((node) => node?.type === 'input')
 const change = (tree, label, value) => input(tree, label).props.onChange({ target: { value } })
-function submit(tree, label) {
-  const form = nodes(tree, 'form').find((node) => button(node, label))
-  assert.equal(button(form, label).props.disabled, false)
-  form.props.onSubmit({ preventDefault() {} })
-}
+const control = (tree) => input(tree, '允许远程控制本机')
+const toggle = (tree, checked) => control(tree).props.onChange({ target: { checked } })
 function popup() {
   const destinations = []
   const tab = {
@@ -132,37 +135,43 @@ function popup() {
   return { tab, destinations }
 }
 
-test('lists only Web peers and handles polling, focus, and retry', async (t) => {
+test('shows only same-account Web presence and handles polling, focus, and retry', async (t) => {
   const initial = deferred()
   let next = initial.promise
   const panel = mount(t, () => next)
-  assert.match(text(panel.render()), /正在加载 Web 设备/)
-  initial.resolve(status({ devices: [
-    { ...peer, sessions: [{ title: '不显示的会话' }] },
-    { ...peer, device_id: 'off', device_name: '离线设备', status: 'offline' },
-    { ...peer, device_id: 'off-web', device_name: '未开设备', web_enabled: false },
-    { ...peer, device_id: 'self', device_name: '不显示的自己', is_self: true },
-    { ...peer, device_id: 'unpaired', device_name: '不显示的未配对', paired: false },
-  ] }))
+  assert.match(text(panel.render()), /正在加载跨设备状态/)
+  initial.resolve(status({
+    email: 'hidden-account@example.test', google_sub: 'hidden-google-subject', access_token: 'hidden-token',
+    devices: [
+      { ...peer, sessions: [{ title: 'hidden-session' }], email: 'hidden-peer@example.test', web_url: 'https://hidden-peer.example.test' },
+      { ...peer, device_id: 'off', device_name: '离线设备', status: 'offline' },
+      { ...peer, device_id: 'off-web', device_name: '未开设备', web_enabled: false },
+      { device_name: 'hidden-malformed', device_id: 'bad', status: 'surprise', web_enabled: true },
+    ],
+  }))
   let tree = await panel.settle()
-  assert.doesNotMatch(text(tree), /不显示/)
-  assert.deepEqual(nodes(tree, 'li').map((row) => text(row).split('打开 Web')[0]), ['远程设备在线', '离线设备离线', '未开设备在线未开放 Web'])
+  assert.doesNotMatch(JSON.stringify(tree), /hidden-/)
+  assert.deepEqual(nodes(tree, 'li').map((row) => text(row).split('打开 Web')[0]), ['远程设备在线', '离线设备离线', '未开设备在线未开放远程控制'])
   assert.deepEqual(nodes(tree, 'li').map((row) => button(row, '打开 Web').props.disabled), [false, true, true])
+  for (const row of nodes(tree, 'li').slice(1)) button(row, '打开 Web').props.onClick()
+  assert.deepEqual(panel.requests.map((req) => req.path), ['/web/status'])
   next = { http: 502, data: { error: { code: 'hub_error' } } }
   panel.tick()
   panel.focus() // no duplicate while the poll is in flight
   tree = await panel.settle()
   assert.equal(panel.requests.length, 2)
-  assert.match(text(tree), /读取 Web 设备失败/)
+  assert.match(text(tree), /读取跨设备状态失败.*无法连接中继/)
   assert.equal(nodes(tree, 'li').length, 0)
-  next = status({ devices: [], web_error: 'hub_error' })
+  next = status({ web_error: 'relay_unavailable' })
   button(tree, '重试').props.onClick()
   tree = await panel.settle()
-  assert.match(text(tree), /读取 Web 设备失败/)
-  next = status({ joined: false }) // ignore even unexpected peer data when not joined
+  assert.match(text(tree), /读取跨设备状态失败.*无法连接远程控制中继/)
+  assert.equal(nodes(tree, 'li').length, 0)
+  next = status({ login_provider: 'legacy' }) // even unexpected peer data stays hidden
   panel.focus()
   tree = await panel.settle()
-  assert.match(text(tree), /暂无已配对的 Web 设备/)
+  assert.ok(google(tree))
+  assert.doesNotMatch(text(tree), /已通过 Google 登录|同账号设备|已配对/)
   assert.equal(nodes(tree, 'li').length, 0)
   button(tree, '刷新').props.onClick()
   await panel.settle()
@@ -196,18 +205,26 @@ test('reserves an isolated blank tab synchronously and serializes the click', as
 
 test('rejects unsafe entry URLs and closes pending tabs on error or unmount', async (t) => {
   for (const invalid of [
-    'http://remote.example/dsh-bridge-enter', localOrigin + '/dsh-bridge-enter',
-    'https://dev.localhost./dsh-bridge-enter', 'https://2130706433/dsh-bridge-enter', 'https://[::1]/dsh-bridge-enter',
-    'https://user:pass@remote.example/dsh-bridge-enter', entry + '?', entry + '#token', entry + '/',
-    'https://remote.example/dsh-bridge-elsewhere', 'https://remote.example/a/../dsh-bridge-enter',
-    'https://remote.example/%2e/dsh-bridge-enter', 'https://remote.example/%64sh-bridge-enter',
+    undefined, { url: entry },
+    entry.replace('http:', 'https:'), entry.replace('http:', 'HTTP:'), localOrigin + '/dsh-relay-enter#' + entrySecret,
+    entry.replace(entryHost, '127.0.0.1'), entry.replace(entryHost, entryHost + '.'), entry.replace(entryHost, '2130706433'),
+    entry.replace(entryHost, 'localhost'), entry.replace(entryHost, '[::1]'),
+    entry.replace(entryHost, entryHost + '@example.test'), entry.replace(entryHost, 'u:password@' + entryHost),
+    entry.replace(':59182', ''), entry.replace(':59182', ':80'), entry.replace(':59182', ':0'),
+    entry.replace(':59182', ':059182'), entry.replace(':59182', ':65536'),
+    entryRoot + '?secret=' + entrySecret + '#' + entrySecret, entryRoot + '?#' + entrySecret,
+    entryRoot, entry + '/', entry + '=', entry + 'A', entry.slice(0, -1), entry.replace('#m', '#%6d'),
+    ' ' + entry, entry + '\n', entry.replace('/dsh-relay-enter', '/a/../dsh-relay-enter'), entry.replace('/dsh-relay-enter', '/%64sh-relay-enter'),
+    entry.replace('dsh-relay-enter', 'dsh-bridge-enter'),
   ]) {
     const { tab, destinations } = popup()
     const panel = mount(t, ({ path }) => path === '/web/status' ? status() : { entry_url: invalid }, { open: () => tab })
     panel.render()
     open(await panel.settle()).props.onClick()
-    assert.match(text(await panel.settle()), /远端入口无效/)
-    assert.equal(tab.closed, true, invalid)
+    const tree = await panel.settle()
+    assert.match(text(tree), /远端入口无效/)
+    assert.doesNotMatch(JSON.stringify(tree), /mock-relay-secret|password|secret=/)
+    assert.equal(tab.closed, true, String(invalid))
     assert.deepEqual(destinations, [])
     panel.unmount()
   }
@@ -226,18 +243,24 @@ test('rejects unsafe entry URLs and closes pending tabs on error or unmount', as
   assert.equal(panel.writes(), writes)
 })
 
-test('offers an explicit noopener fallback when popups are blocked', async (t) => {
-  const panel = mount(t, ({ path }) => path === '/web/status' ? status() : { entry_url: entry })
+test('uses a second explicit click with noopener and no secret in rendered content if blocked', async (t) => {
+  const calls = []
+  const panel = mount(t, ({ path }) => path === '/web/status' ? status() : { entry_url: entry }, {
+    open(...args) { calls.push(args); return null },
+  })
   panel.render()
   open(await panel.settle()).props.onClick()
-  const [link] = nodes(await panel.settle(), 'a')
-  assert.equal(link.props.href, entry)
-  assert.equal(link.props.target, '_blank')
-  assert.equal(link.props.rel, 'noopener noreferrer')
+  const tree = await panel.settle()
+  assert.equal(nodes(tree, 'a').length, 0)
+  assert.doesNotMatch(JSON.stringify(tree), /mock-relay-secret|dsh-relay-enter/)
+  const label = '在新标签页继续打开 远程设备 的 DSH Web'
+  button(tree, label).props.onClick()
+  assert.deepEqual(calls, [['about:blank', '_blank'], [entry, '_blank', 'noopener,noreferrer']])
+  assert.equal(button(panel.render(), label), undefined)
 })
 
-test('Google-first pairing reserves an isolated tab on click and confirms via local status', async (t) => {
-  let current = status({ joined: false, login_provider: null, devices: [] })
+test('Google login reserves an isolated tab on click and confirms via local status', async (t) => {
+  let current = signedOut()
   const { tab, destinations } = popup()
   const opening = deferred()
   let reservations = 0
@@ -251,8 +274,8 @@ test('Google-first pairing reserves an isolated tab on click and confirms via lo
   panel.render()
   let tree = await panel.settle()
   const [primary] = nodes(tree, 'section')
-  assert.match(text(primary), /同一中继和同一个 Google 账号.*自动配对，无需邀请码/)
-  assert.equal(input(primary, 'Web 配对中继地址').props.value, current.hub_url)
+  assert.match(text(primary), /同一中继和同一个 Google 账号.*发现其他设备/)
+  assert.equal(input(primary, hubLabel), undefined)
   assert.equal(google(primary).props.disabled, false)
   assert.deepEqual(panel.requests.map((req) => req.path), ['/web/status'])
   const click = google(primary).props.onClick
@@ -277,8 +300,8 @@ test('Google-first pairing reserves an isolated tab on click and confirms via lo
   assert.equal(tab.closed, false)
 })
 
-test('links a joined Web identity only at its fixed Hub', async (t) => {
-  let current = status({ joined: false, hub_url: '', devices: [] })
+test('binds a joined legacy identity to Google only at its configured Hub', async (t) => {
+  let current = signedOut({ hub_url: '' })
   const panel = mount(t, ({ path, body }) => {
     if (path === '/web/status') return current
     assert.equal(path, googleStart)
@@ -286,37 +309,40 @@ test('links a joined Web identity only at its fixed Hub', async (t) => {
     return { authorization_url: googleAuthorization }
   })
   panel.render()
-  change(await panel.settle(), 'Web 配对中继地址', 'https://unjoined-draft.example/')
-  current = status({ hub_url: 'https://fixed-hub.example/', login_provider: null })
+  change(await panel.settle(), hubLabel, 'https://unjoined-draft.example/')
+  current = status({ hub_url: 'https://fixed-hub.example/', login_provider: 'legacy', remote_control_enabled: true, control_ready: true })
   panel.tick()
   const tree = await panel.settle()
-  assert.equal(input(tree, 'Web 配对中继地址'), undefined)
-  assert.ok(text(tree).includes('中继地址（固定）：https://fixed-hub.example/'))
-  assert.match(text(tree), /关联到现有 Web 身份，保留原有配对/)
+  assert.equal(input(tree, hubLabel), undefined)
+  assert.match(text(tree), /将现有 Web 身份关联到 Google 账号/)
+  assert.doesNotMatch(text(tree), /已通过 Google 登录|已配对|Web 邀请码|本机 DSH Web HTTPS 地址/)
+  assert.equal(nodes(tree, 'li').length, 0)
+  assert.equal(control(tree), undefined)
   google(tree).props.onClick()
   await panel.settle()
   assert.deepEqual(panel.requests.filter((req) => req.init.method === 'POST').map((req) => req.path), [googleStart])
 })
 
-test('blocked popup offers only a validated, isolated link and removes it on Hub edit or sign-in', async (t) => {
-  let current = status({ joined: false, login_provider: null, devices: [] })
+test('blocked Google popup offers a validated isolated link and removes it on Hub edit or sign-in', async (t) => {
+  let current = signedOut({ hub_url: '' })
   const panel = mount(t, ({ path }) => path === '/web/status' ? current : { authorization_url: googleAuthorization })
   panel.render()
-  google(await panel.settle()).props.onClick()
+  change(await panel.settle(), hubLabel, 'https://hub.example/')
+  google(panel.render()).props.onClick()
   let tree = await panel.settle()
   const [link] = nodes(tree, 'a')
   assert.equal(link.props.href, googleAuthorization)
   assert.equal(link.props.target, '_blank')
   assert.equal(link.props.rel, 'noopener noreferrer')
-  change(tree, 'Web 配对中继地址', 'https://different.example')
+  change(tree, hubLabel, 'https://different.example')
   tree = panel.render()
   assert.equal(nodes(tree, 'a').length, 0)
-  change(tree, 'Web 配对中继地址', current.hub_url)
+  change(tree, hubLabel, 'https://hub.example/')
   tree = panel.render()
   assert.equal(nodes(tree, 'a').length, 0)
   google(tree).props.onClick()
   assert.equal(nodes(await panel.settle(), 'a').length, 1)
-  current = status({ login_provider: 'google' })
+  current = status()
   panel.tick()
   tree = await panel.settle()
   assert.match(text(tree), /已通过 Google 登录/)
@@ -336,7 +362,7 @@ test('Google sign-in fails closed on noncanonical authorization URLs', async (t)
     googleAuthorization.replace('/v2/auth', '/v2/auth/'), googleAuthorization + '\\invalid', ' ' + googleAuthorization,
   ]) {
     const { tab, destinations } = popup()
-    const panel = mount(t, ({ path }) => path === '/web/status' ? status() : { authorization_url: invalid }, { open: () => tab })
+    const panel = mount(t, ({ path }) => path === '/web/status' ? signedOut() : { authorization_url: invalid }, { open: () => tab })
     panel.render()
     google(await panel.settle()).props.onClick()
     const tree = await panel.settle()
@@ -346,41 +372,40 @@ test('Google sign-in fails closed on noncanonical authorization URLs', async (t)
     assert.equal(nodes(tree, 'a').length, 0)
     panel.unmount()
   }
-  const panel = mount(t, ({ path }) => path === '/web/status' ? status() : { authorization_url: entry })
+  const panel = mount(t, ({ path }) => path === '/web/status' ? signedOut() : { authorization_url: entry })
   panel.render()
   google(await panel.settle()).props.onClick()
   assert.equal(nodes(await panel.settle(), 'a').length, 0)
 })
 
-test('requires a usable Hub for Google and explains an older Hub without disabling invitations', async (t) => {
+test('accepts a Hub root only when unconfigured and offers no Web invite fallback', async (t) => {
   let reservations = 0
   const { tab } = popup()
   const panel = mount(t, ({ path, body }) => {
-    if (path === '/web/status') return status({ joined: false, hub_url: '', devices: [] })
+    if (path === '/web/status') return signedOut({ hub_url: '' })
     assert.equal(path, googleStart)
     assert.deepEqual(body, { hub_url: 'http://127.0.0.1:3081/' })
     return { http: 404, data: { error: { code: 'not_found' } } }
   }, { open: () => { reservations++; return tab } })
   panel.render()
   let tree = await panel.settle()
-  assert.equal(input(tree, 'Web 配对中继地址').props.value, '')
+  assert.equal(input(tree, hubLabel).props.value, '')
   assert.equal(google(tree).props.disabled, true)
   for (const invalid of ['http://public-hub.example', 'https://hub.example/prefix', 'https://hub.example/?token=unsafe']) {
-    change(tree, 'Web 配对中继地址', invalid)
+    change(tree, hubLabel, invalid)
     tree = panel.render()
     assert.equal(google(tree).props.disabled, true)
     google(tree).props.onClick()
   }
   assert.equal(reservations, 0)
-  change(tree, 'Web 配对中继地址', 'http://127.0.0.1:3081/')
+  change(tree, hubLabel, 'http://127.0.0.1:3081/')
   google(panel.render()).props.onClick()
   tree = await panel.settle()
-  assert.match(text(tree), /中继不支持 Google 登录或尚未配置.*使用 Web 邀请码配对/)
+  assert.match(text(tree), /中继不支持 Google 登录或尚未配置.*联系中继管理员/)
   assert.equal(tab.closed, true)
-  const fallback = detailsWith(tree, 'Web 邀请码配对（备用）')
-  assert.notEqual(fallback.props.open, true)
-  change(fallback, '24 位 Web 邀请码', invite)
-  assert.equal(button(panel.render(), '使用 Web 邀请码配对').props.disabled, false)
+  assert.doesNotMatch(text(tree), /Web 邀请码|启用本机 Web 身份|本机 DSH Web HTTPS 地址/)
+  assert.equal(nodes(tree, 'details').length, 0)
+  assert.deepEqual(panel.requests.map((req) => req.path), ['/web/status', googleStart, '/web/status'])
 })
 
 test('maps Google errors without reflecting server text', async (t) => {
@@ -390,7 +415,7 @@ test('maps Google errors without reflecting server text', async (t) => {
     [429, 'google_flow_limit', /Google 登录请求过多/],
     [502, 'unexpected-server-secret', /操作失败（HTTP 502）/],
   ]) {
-    const panel = mount(t, ({ path }) => path === '/web/status' ? status() : { http, data: { error: { code, message: 'server-secret' } } })
+    const panel = mount(t, ({ path }) => path === '/web/status' ? signedOut() : { http, data: { error: { code, message: 'server-secret' } } })
     panel.render()
     google(await panel.settle()).props.onClick()
     const tree = await panel.settle()
@@ -402,103 +427,148 @@ test('maps Google errors without reflecting server text', async (t) => {
   }
 })
 
-test('pairs by invitation and changes presence only after explicit opt-in', async (t) => {
-  let current = status({ joined: false, can_enroll: true, hub_url: '', advertised_web_url: localOrigin })
+test('defaults control to off and confirms native owner access only when enabling', async (t) => {
+  let current = status()
+  let approved = false, confirmations = 0
   const panel = mount(t, ({ path, body }) => {
-    switch (path) {
-      case '/web/status': return current
-      case '/web/enroll': return { http: 403, data: { error: { code: 'forbidden' } } }
-      case '/web/pairing/claim': current = { ...current, joined: true, can_enroll: false, hub_url: body.hub_url }; return { ok: true }
-      case '/web/pairing/code': return { code: invite, expires_at: '2099-01-01T00:00:00Z' }
-      case '/web/presence': current = { ...current, web_url: body.web_url }; return { ok: true }
-    }
-  })
-  panel.render()
-  let tree = await panel.settle()
-  button(tree, '启用本机 Web 身份').props.onClick()
-  tree = await panel.settle()
-  assert.match(text(tree), /403/)
-  assert.deepEqual(panel.requests.find((req) => req.path === '/web/enroll').body, {})
-  change(tree, 'Web 配对中继地址', 'https://other-hub.example/')
-  change(tree, '24 位 Web 邀请码', '123456')
-  tree = panel.render()
-  assert.equal(button(tree, '使用 Web 邀请码配对').props.disabled, true)
-  change(tree, '24 位 Web 邀请码', ' ' + invite + ' ')
-  submit(panel.render(), '使用 Web 邀请码配对')
-  tree = await panel.settle()
-  assert.equal(input(tree, 'Web 配对中继地址'), undefined)
-  change(tree, '24 位 Web 邀请码', invite)
-  submit(panel.render(), '使用 Web 邀请码配对')
-  tree = await panel.settle()
-  assert.deepEqual(panel.requests.filter((req) => req.path === '/web/pairing/claim').map((req) => req.body), [
-    { hub_url: 'https://other-hub.example/', code: invite }, { hub_url: 'https://other-hub.example/', code: invite },
-  ])
-  button(tree, '生成 Web 邀请码').props.onClick()
-  tree = await panel.settle()
-  assert.match(text(tree), /有效至/)
-  assert.equal(input(tree, '本机 DSH Web HTTPS 地址').props.value, localOrigin)
-  assert.equal(panel.requests.some((req) => req.path === '/web/presence'), false)
-  change(tree, '本机 DSH Web HTTPS 地址', localOrigin + '?token=unsafe')
-  assert.equal(button(panel.render(), '开放 Web').props.disabled, true)
-  change(tree, '本机 DSH Web HTTPS 地址', 'https://different.example')
-  assert.equal(button(panel.render(), '开放 Web').props.disabled, true)
-  change(tree, '本机 DSH Web HTTPS 地址', localOrigin + '/')
-  submit(panel.render(), '开放 Web')
-  tree = await panel.settle()
-  assert.match(text(tree), /已开放 Web：https:\/\/local\.example/)
-  button(tree, '关闭 Web').props.onClick()
-  await panel.settle()
-  assert.deepEqual(panel.requests.filter((req) => req.path === '/web/presence').map((req) => req.body), [{ web_url: localOrigin }, { web_url: null }])
-})
-
-test('confirms unlink and ignores an obsolete pre-mutation status reply', async (t) => {
-  let confirm = false, reads = 0, unlinked = false
-  const stale = deferred()
-  const panel = mount(t, ({ path, body }) => {
-    if (path === '/web/status') return ++reads === 2 ? stale.promise : status({ devices: unlinked ? [] : [peer] })
-    assert.equal(path, '/web/unpair')
-    assert.deepEqual(body, { device_id: 'peer' })
-    unlinked = true
+    if (path === '/web/status') return current
+    assert.equal(path, '/web/control')
+    assert.deepEqual(body, { enabled: !current.remote_control_enabled })
+    current = status({ remote_control_enabled: body.enabled })
     return { ok: true }
-  }, { confirm(message) { assert.match(message, /解除与「远程设备」/); return confirm } })
-  panel.render()
-  const unlink = button(await panel.settle(), '解除配对').props.onClick
-  unlink()
-  assert.equal(unlinked, false)
-  panel.focus() // a read can start before React commits the next render
-  const obsolete = panel.requests.at(-1)
-  confirm = true
-  unlink()
-  assert.equal(obsolete.init.signal.aborted, true)
-  assert.match(text(await panel.settle()), /暂无已配对的 Web 设备/)
-  stale.resolve(status())
-  assert.equal(nodes(await panel.settle(), 'li').length, 0)
-})
-
-test('keeps six-digit iOS pairing in its own collapsible view', async (t) => {
-  let configured = false
-  const panel = mount(t, ({ path }) => {
-    switch (path) {
-      case '/web/status': return status({ devices: [] })
-      case '/config': return { enabled: configured, hub_url: 'https://sync.example', token_configured: configured }
-      case '/pairing/claim': configured = true; return { ok: true }
-      case '/pairing/code': return { code: '123456' }
-    }
-  })
+  }, { confirm(message) {
+    confirmations++
+    assert.match(message, /同一 Google 账号.*所有者.*DSH 终端.*不是屏幕共享/)
+    return approved
+  } })
   panel.render()
   let tree = await panel.settle()
-  assert.equal(panel.requests.some((req) => req.path === '/config'), false)
-  const details = detailsWith(tree, '会话同步配对（iOS）')
-  assert.equal(input(details, '24 位 Web 邀请码'), undefined)
-  details.props.onToggle({ currentTarget: { open: true } })
+  assert.equal(control(tree).props.role, 'switch')
+  assert.equal(control(tree).props.checked, false)
+  assert.equal(control(tree).props.disabled, false)
+  assert.match(text(tree), /远程控制已关闭/)
+  assert.doesNotMatch(text(tree), /Web 邀请码|本机 DSH Web HTTPS 地址|解除配对/)
+  assert.deepEqual(panel.requests.map((req) => req.path), ['/web/status'])
+  toggle(tree, true)
+  assert.equal(confirmations, 1)
+  assert.equal(panel.requests.length, 1)
+  assert.equal(control(panel.render()).props.checked, false)
+
+  approved = true
+  toggle(tree, true)
   tree = await panel.settle()
-  change(tree, '会话同步中继地址', 'https://sync.example')
-  change(tree, '6 位会话同步配对码', '12a3456')
-  submit(panel.render(), '配对会话同步')
+  assert.equal(control(tree).props.checked, true)
+  assert.match(text(tree), /已允许远程控制，等待中继就绪/)
+  current = { ...current, control_error: 'relay_certificate_error' }
+  panel.tick()
   tree = await panel.settle()
-  assert.deepEqual(panel.requests.find((req) => req.path === '/pairing/claim').body, { hub_url: 'https://sync.example', code: '123456' })
-  button(tree, '生成 6 位配对码').props.onClick()
+  assert.match(text(tree), /无法验证中继的安全凭证/)
+  assert.equal(open(tree).props.disabled, false, 'local host readiness does not affect outgoing opens')
+  current = { ...current, control_ready: true, control_error: null }
+  panel.tick()
   tree = await panel.settle()
-  assert.equal(nodes(tree, 'code').some((node) => text(node) === '123456'), true)
-  assert.equal(nodes(tree, 'li').length, 0)
+  assert.match(text(tree), /远程控制已就绪/)
+  toggle(tree, false)
+  tree = await panel.settle()
+  assert.equal(control(tree).props.checked, false)
+  assert.match(text(tree), /其他设备无法再通过中继访问本机/)
+  assert.equal(confirmations, 2, 'turning off must not prompt again')
+  assert.deepEqual(panel.requests.filter((req) => req.path === '/web/control').map((req) => req.body), [{ enabled: true }, { enabled: false }])
+})
+
+test('can revoke control despite an unreachable Hub and prevents stale polling from restoring the switch', async (t) => {
+  const stale = deferred()
+  let current = status({ remote_control_enabled: true, web_error: 'relay_unavailable' })
+  let reads = 0
+  const panel = mount(t, ({ path, body }) => {
+    if (path === '/web/status') return ++reads === 2 ? stale.promise : current
+    assert.equal(path, '/web/control')
+    assert.deepEqual(body, { enabled: false })
+    current = status({ web_error: 'relay_unavailable' })
+    return { ok: true }
+  }, { confirm() { assert.fail('revocation never requires confirmation') } })
+  panel.render()
+  let tree = await panel.settle()
+  assert.match(text(tree), /无法连接远程控制中继/)
+  assert.equal(control(tree).props.checked, true)
+  assert.equal(control(tree).props.disabled, false)
+  panel.focus()
+  const obsolete = panel.requests.at(-1)
+  toggle(panel.render(), false)
+  assert.equal(obsolete.init.signal.aborted, true)
+  tree = await panel.settle()
+  assert.equal(control(tree).props.checked, false)
+  assert.equal(control(tree).props.disabled, true, 'cannot enable while Hub status reports an error')
+  stale.resolve(status({ remote_control_enabled: true, control_ready: true }))
+  tree = await panel.settle()
+  assert.equal(control(tree).props.checked, false)
+  assert.doesNotMatch(text(tree), /远程控制已就绪/)
+})
+
+test('still attempts local revocation when refresh fails after a valid Google status', async (t) => {
+  let reads = 0
+  const panel = mount(t, ({ path, body }) => {
+    if (path === '/web/status') return ++reads === 1
+      ? status({ remote_control_enabled: true, control_ready: true })
+      : { http: 502, data: { error: { code: 'hub_unavailable' } } }
+    assert.equal(path, '/web/control')
+    assert.deepEqual(body, { enabled: false })
+    return { ok: true }
+  })
+  panel.render()
+  await panel.settle()
+  panel.tick()
+  let tree = await panel.settle()
+  assert.equal(control(tree).props.disabled, false)
+  toggle(tree, false)
+  tree = await panel.settle()
+  assert.equal(control(tree).props.checked, false)
+  assert.match(text(tree), /已关闭远程控制/)
+})
+
+test('keeps the persisted toggle state after a rejected change', async (t) => {
+  const panel = mount(t, ({ path }) => path === '/web/status' ? status() : {
+    http: 403, data: { error: { code: 'local_control_only', message: 'hidden-email@example.test' } },
+  })
+  panel.render()
+  toggle(await panel.settle(), true)
+  const tree = await panel.settle()
+  assert.equal(control(tree).props.checked, false)
+  assert.match(text(tree), /在本机直接打开 DSH/)
+  assert.doesNotMatch(text(tree), /hidden-email/)
+})
+
+test('explains unavailable targets and relay failures without echoing server data', async (t) => {
+  for (const [code, copy] of [
+    ['target_unavailable', /对方设备当前不可访问/],
+    ['device_not_found', /找不到此设备/],
+    ['web_not_enabled', /对方设备未允许远程控制/],
+    ['relay_not_ready', /中继尚未就绪/],
+    ['relay_unavailable', /无法连接远程控制中继/],
+    ['relay_certificate_error', /无法验证中继的安全凭证/],
+    ['google_binding_required', /请先使用 Google 登录/],
+    ['hidden-error-code', /操作失败（HTTP 409）/],
+  ]) {
+    const { tab, destinations } = popup()
+    const panel = mount(t, ({ path }) => path === '/web/status' ? status() : {
+      http: 409, data: { error: { code, message: entry } },
+    }, { open: () => tab })
+    panel.render()
+    open(await panel.settle()).props.onClick()
+    const tree = await panel.settle()
+    assert.match(text(tree), copy)
+    assert.doesNotMatch(JSON.stringify(tree), /mock-relay-secret|hidden-error-code/)
+    assert.deepEqual(destinations, [])
+    assert.equal(tab.closed, true)
+    panel.unmount()
+  }
+})
+
+test('shows no pairing codes or legacy enrollment controls', async (t) => {
+  const panel = mount(t, () => status({ devices: [] }))
+  panel.render()
+  const tree = await panel.settle()
+  assert.doesNotMatch(text(tree), /配对码|邀请码|会话同步配对/)
+  assert.equal(nodes(tree, 'details').length, 0)
+  assert.ok(panel.requests.every((req) => req.path === '/web/status'))
 })

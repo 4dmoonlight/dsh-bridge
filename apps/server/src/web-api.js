@@ -95,7 +95,7 @@ export function createWebApi({ db, instanceToken, bodyLimit = WEB_BODY_LIMIT }) 
   };
 }
 
-function bearerOf(req) {
+export function bearerOf(req) {
   const headers = req.headersDistinct.authorization;
   if (!headers) return null;
   const match = headers.length === 1 && /^Bearer +([^\s,]+)$/i.exec(headers[0]);
