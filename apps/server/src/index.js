@@ -11,12 +11,19 @@ const dataDir = resolve(args['data-dir'] ?? process.env.BRIDGE_DATA_DIR ?? join(
 const host = args.host ?? process.env.BRIDGE_HOST ?? '127.0.0.1';
 const port = Number(args.port ?? process.env.BRIDGE_PORT ?? 8787);
 const token = await resolveToken(dataDir, process.env.BRIDGE_TOKEN ?? args.token);
+const google = {
+  clientId: process.env.BRIDGE_GOOGLE_CLIENT_ID,
+  clientSecret: process.env.BRIDGE_GOOGLE_CLIENT_SECRET,
+  redirectUri: process.env.BRIDGE_GOOGLE_REDIRECT_URI,
+  allowedEmails: parseCsv(process.env.BRIDGE_GOOGLE_ALLOWED_EMAILS),
+  returnOrigins: parseCsv(process.env.BRIDGE_GOOGLE_RETURN_ORIGINS),
+};
 
 // Open bridge.sqlite before listening so a broken schema/database fails at
 // startup instead of on the first cross-device request. The app attaches the
 // /api/v1/ws 'upgrade' handler when it creates the HTTP server.
 const db = openDatabase({ dataDir });
-const app = await createHubApp({ dataDir, instanceToken: token, db });
+const app = await createHubApp({ dataDir, instanceToken: token, db, google });
 const { port: actualPort, url } = await app.listen(port, host);
 
 console.log(
@@ -57,6 +64,10 @@ async function resolveToken(dir, provided) {
   const generated = randomBytes(32).toString('base64url');
   await writeFile(file, generated + '\n', { mode: 0o600 });
   return generated;
+}
+
+function parseCsv(value) {
+  return (value ?? '').split(',').map((item) => item.trim()).filter(Boolean);
 }
 
 function parseArgs(argv) {

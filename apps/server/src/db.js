@@ -8,6 +8,7 @@ export function hashToken(token) {
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { HttpError, clipText } from './util.js';
+import { WebDb } from './web-db.js';
 
 export const DB_FILENAME = 'bridge.sqlite';
 export const OFFLINE_AFTER_MS = 60_000;
@@ -133,6 +134,7 @@ export class HubDb {
     this.database.exec('PRAGMA journal_mode = WAL');
     this.database.exec('PRAGMA synchronous = NORMAL');
     this.database.exec(SCHEMA);
+    this.web = new WebDb(this.database, () => this.#date().getTime());
 
     this.statements = {
       upsertDevice: this.database.prepare(`

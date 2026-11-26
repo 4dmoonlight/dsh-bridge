@@ -24,8 +24,9 @@ multi-tenant and it is **not** end-to-end encrypted.
   mobile plugin's HKDF/AES-GCM pairing scheme) is the main roadmap item before
   any public deployment.
 - **No end-to-end encryption between devices.** The hub sees plaintext.
-- **No per-device read scoping.** Every credential can read every stored session;
-  isolation is by device ownership of *writes*, not by visibility.
+- **No per-device read scoping for session sync.** Every session-sync credential
+  can read every stored session; isolation is by device ownership of *writes*.
+  Web-device credentials do not authenticate to session sync.
 - **No audit log.** Actions are not attributed to a person, only to a credential.
 - **No automatic token expiry.** Device credentials live until revoked.
 
@@ -43,6 +44,28 @@ multi-tenant and it is **not** end-to-end encrypted.
   endpoint is rate limited to 12 attempts per minute.
 - **No SQL injection surface:** every value goes through a prepared statement.
 - **On-disk hygiene:** data directory 0700, SQLite file 0600, config files 0600.
+
+## Web pairing
+
+- Web-device credentials and invites are distinct from session-sync credentials.
+  A Web device can be bootstrapped by the instance token, a Web invitation, or
+  a verified allowlisted Google account if configured. A single-use Web invite
+  links the claimant to its issuer only. A session token
+  or a heartbeat does not authorize discovery or opening of a Web device.
+- Google sign-in verifies the ID token and binds Web membership to a hash of
+  the stable Google subject, not to the email address. The allowlist controls
+  new sign-ins; it does not revoke existing Web credentials or native DSH login.
+  Google tokens are not stored. The Hub issues a short-lived grant that is
+  delivered to the viewing DSH browser and redeemed with a server-held verifier
+  and browser binding. The Hub never transfers a Web credential in a URL.
+- Web addresses are explicitly advertised by the target, credential-free HTTPS
+  roots, and returned only to a directly paired device when that target is
+  online. The Hub does not fetch those addresses or handle their cookies or traffic.
+- The plugin's exact API routes require same-origin DSH owner admission. Ordinary
+  page and API access on the target uses native DSH authentication. Use an
+  access-controlled HTTPS endpoint, never a publicly bound DSH HTTP port.
+- Unpairing blocks subsequent list/open requests for that device, not DSH login
+  cookies already issued independently. See [Web access setup](WEB-ACCESS.md).
 
 ## Hardening checklist before exposing it
 

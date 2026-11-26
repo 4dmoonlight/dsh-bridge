@@ -2,7 +2,7 @@
 
 给 DeepSeek Harness（DSH）做的**会话同步中转**：Mac 上读取本地会话，推给一台你自己控制的中转服务器；其他设备（或另一台 Mac）从中转读，或让它实时向 Mac 要最新版本。
 
-首个版本（macOS）**只做会话同步**——不同步终端、文件、模型配置，也不做聊天转发。
+原生客户端仍只同步会话，不同步终端、文件、模型配置或聊天。DSH 的「跨设备」插件另可列出已配对设备，在新标签页打开远端实际运行的 DSH Web。
 
 ```
 Mac (dsh-bridge)  ──push──►  中转服务器 (hub)  ◄──list/read──  其他客户端
@@ -47,6 +47,10 @@ cd dsh-bridge
 
 想看界面：`~/.local/bin/dsh-bridge ui`。
 
+## 在浏览器打开远端 DSH
+
+更新 Hub 和两台电脑的插件后，可在「跨设备」用同一个 Google 账号登录，设备会自动关联，不用复制邀请码。远端 DSH 仍需可达、受保护的独立 HTTPS 地址，并保留原有登录。开启分享后，点击在线设备打开远端的插件、侧栏和会话，不镜像屏幕。见 [Google 登录和远端 Web 配置](docs/WEB-ACCESS.md)。
+
 ## 命令
 
 | 命令 | 作用 |
@@ -65,7 +69,7 @@ cd dsh-bridge
 零依赖，直接跑：
 
 ```bash
-BRIDGE_TOKEN=secret BRIDGE_PORT=8787 BRIDGE_DATA_DIR=~/.dsh-bridge/hub-data \
+BRIDGE_PORT=8787 BRIDGE_DATA_DIR=~/.dsh-bridge/hub-data \
   node apps/server/src/index.js
 ```
 
@@ -82,18 +86,21 @@ BRIDGE_TOKEN=secret BRIDGE_PORT=8787 BRIDGE_DATA_DIR=~/.dsh-bridge/hub-data \
 ## 测试
 
 ```bash
-cd apps/server && npm test          # 12 个用例：鉴权、同步、跳过旧快照、重启持久化、实时中转、SSE
-cd apps/macos && swift test    # 模型、配置、DSH v4 解析
-bash scripts/e2e.sh            # 起真中转 + 真二进制，验证 live 与 stored 两条路径
+(cd apps/server && npm test)   # Hub 鉴权、配对、同步与转发
+node --test packages/dsh-cross-device/test/*.test.js  # 设备面板
+(cd apps/macos && swift test)  # 模型、配置、DSH v4 解析
+bash scripts/e2e.sh           # 原生客户端的 live 与 stored 路径
+node scripts/e2e-web.mjs      # 需 dsh CLI；使用隔离的双 Web 实例和测试 Hub
+node scripts/e2e-web.mjs --google  # 签名模拟 Google，不使用真实账号
 ```
 
 ## 已知边界
 
-- 只同步会话：不传终端、文件、附件、模型配置。
-- 单租户：所有合法令牌可读全部会话。
+- 会话同步不传终端、文件、附件、模型配置；远端 Web 不经过 Hub 转发。
+- 会话同步是单租户：合法的会话同步令牌可读全部会话；Web 设备令牌不能读取这些会话。
 - 无端到端加密；服务端存明文快照（有上限：每会话 2000 条消息 / 单条 2 万字符）。
 - 单进程存储（JSON 原子替换）；不要多实例共享同一目录。
-- 仅 macOS 宿主；iOS/网页客户端尚未实现（协议已就绪）。
+- macOS 宿主和 iOS 客户端继续使用会话同步协议；Web 配对是单独的授权。
 
 ## License
 

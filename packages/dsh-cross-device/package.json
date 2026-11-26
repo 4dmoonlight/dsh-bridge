@@ -1,7 +1,7 @@
 {
   "name": "dsh-cross-device",
   "version": "0.1.0",
-  "description": "跨设备 DSH 会话互联:侧边栏按电脑分组展示会话,点击实时拉取并同步",
+  "description": "跨设备 DSH：在浏览器打开已配对设备的原版 Web，保留独立会话同步",
   "license": "MIT",
   "type": "module",
   "main": "lib/index.js",

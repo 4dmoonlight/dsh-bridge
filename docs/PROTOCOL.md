@@ -27,7 +27,7 @@ See [SECURITY.md](SECURITY.md) before exposing it.
 {
   "id": "session-abc",            // required, <= 200 chars
   "title": "Fix the hub",
-  "workspace": "/Users/me/Dev",
+  "workspace": "/work/example-project",
   "engine": "dsh",
   "createdAt": "2026-11-20T09:00:00.000Z",
   "updatedAt": "2026-11-20T09:42:11.000Z",
@@ -134,6 +134,48 @@ Only the newest poll for a device receives commands; a new poll cancels the old 
 | 422 | `invalid_session`, `invalid_session_id`, `too_many_messages`, `invalid_message`, `invalid_message_role`, `device_name_required` |
 | 502 | `host_error` (or the host's own code) |
 | 504 | `host_timeout` |
+
+## Web device pairing (additive)
+
+These endpoints are not used by the macOS or iOS clients and do not alter the
+existing session credentials, pairing codes, or sidebar. Web credentials bind
+one installation to a Web device. REST accepts credentials in the Bearer
+header, never in a URL. A pairing code links two specific devices; it neither
+joins an entire group nor grants a session-sync credential.
+
+| Method and path | Credentials | Request and result |
+| --- | --- | --- |
+| POST /api/v1/web/enroll | instance | {device_name} → {device_id, token}; bootstrap a Web identity |
+| POST /api/v1/web/pairing/code | Web device | {} → {code, expires_at}; 24 URL-safe characters, once, 10 min |
+| POST /api/v1/web/pairing/claim | optional Web device | {code, device_name} → {device_id, token?}; creates an identity only without a Web credential |
+| POST /api/v1/web/presence | Web device | {device_name, web_url} → {ok: true}; URL is a credential-free HTTPS origin, or null to stop publishing |
+| GET /api/v1/web/devices | Web device | {devices: [{device_id, device_name, status, web_enabled}]}; direct pairs only, including offline peers |
+| POST /api/v1/web/open | Web device | {device_id} → {url}; rechecks that the target is directly paired, online and publishing a Web origin |
+| POST /api/v1/web/unpair | Web device | {device_id} → {ok: true}; removes the link in both directions |
+
+Success is HTTP 200. A missing/invalid Web credential is 401, an unpaired target
+is 404, and an offline (heartbeat older than 60 s) or unpublished Web target is
+409. The device list never carries URLs, credentials, or sessions. The Hub
+returns an entry address only; it does not serve/proxy the target DSH or manage
+its login. See [Web access setup](WEB-ACCESS.md).
+
+### Google sign-in for Web devices (optional)
+
+All paths below are under `/api/v1/web/google`. These routes neither replace
+the invitation endpoints nor authenticate to native DSH.
+
+| Method and path | Request and result |
+| --- | --- |
+| GET /status | `{enabled}`; no OAuth configuration details |
+| POST /start | Optional existing Web Bearer; `{device_name, return_origin, challenge}` → `{flow_id, authorization_url, expires_at}`. The challenge is SHA-256 of a local verifier, in base64url. |
+| GET /callback | Google supplies code and state. A verified allowed account receives a 303 to the registered DSH origin and fixed `/dsh-bridge-google` path, carrying a single-use `flow_id` and `grant` in the fragment. |
+| POST /redeem | `{flow_id, grant, verifier}` → `{device_id, token?}`. One use, short-lived, and bound to the original challenge. Token is returned only for a new Web identity. |
+
+The DSH host keeps the local verifier, requires native owner access and a
+browser-bound flow cookie to complete sign-in, and stores any new Web token
+itself. First association pairs the device with other devices having the
+same verified Google subject. Reauthenticating an already-bound device does
+not restore a removed edge. [Configuration](WEB-ACCESS.md#google-sign-in-recommended).
 
 ## Versioning
 

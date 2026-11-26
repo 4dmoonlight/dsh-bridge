@@ -8,15 +8,16 @@
  * - 卸载时清理定时器、路由和退避等待,不留残留
  */
 
-import { mkdirSync, readFileSync, writeFileSync, existsSync, chmodSync, statSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync, renameSync, rmSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir, hostname } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import { scanAllSessions, listSessionFiles, parseSessionFile } from './scan.js'
 import { createHubClient } from './hub-client.js'
+import { registerWebAccess } from './web-access.js'
 
 export const name = 'dsh-cross-device'
-export const inject = ['webServer']
+export const inject = ['webServer', 'connection', 'webApp']
 
 const STATE_DIR = join(homedir(), '.dsh', 'cross-device')
 const CONFIG_FILE = join(STATE_DIR, 'config.json')
@@ -41,11 +42,12 @@ function readJson(file, fallback) {
 
 function writeJson(file, value) {
   ensureDir()
-  writeFileSync(file, JSON.stringify(value, null, 2), { mode: 0o600 })
+  const tmp = file + '.' + randomUUID() + '.tmp'
   try {
-    chmodSync(file, 0o600)
-  } catch {
-    /* Windows 上无此语义 */
+    writeFileSync(tmp, JSON.stringify(value, null, 2), { mode: 0o600, flag: 'wx' })
+    renameSync(tmp, file)
+  } finally {
+    rmSync(tmp, { force: true })
   }
 }
 
@@ -269,19 +271,15 @@ export function apply(ctx) {
     res.end(payload)
   }
 
-  /**
-   * 本机接口防护。宿主不提供逐路由鉴权,所以自己做两层:
-   * 1) 只接受同源请求(挡掉恶意网页发起的 CSRF);
-   * 2) 写操作必须带 x-cross-device 头(跨源需预检,浏览器不会自动带上)。
-   * 本机其它进程仍可访问,真正的兜底是「换 hub 必须重输 token」。
-   */
-  function guard(req, res) {
-    const origin = req.headers.origin
-    if (typeof origin === 'string' && origin && !/^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/.test(origin)) {
-      json(res, 403, { error: { code: 'forbidden_origin' } })
+  /** Exact plugin routes bypass the /api prefix; apply native DSH admission here. */
+  function guard(req, res, { requireHeader = false } = {}) {
+    const admission = ctx.connection.admit(req)
+    if (admission.rejection || admission.peer?.principal?.kind !== 'owner') {
+      const status = admission.rejection === 401 ? 401 : 403
+      json(res, status, { error: { code: status === 401 ? 'unauthorized' : 'forbidden' } })
       return false
     }
-    if (req.method !== 'GET' && req.method !== 'HEAD' && req.headers['x-cross-device'] !== '1') {
+    if ((requireHeader || (req.method !== 'GET' && req.method !== 'HEAD')) && req.headers['x-cross-device'] !== '1') {
       json(res, 403, { error: { code: 'csrf_header_required' } })
       return false
     }
@@ -474,6 +472,17 @@ export function apply(ctx) {
       },
     }),
   )
+
+  disposers.push(registerWebAccess({
+    ctx,
+    getConfig: () => config,
+    saveIdentity(identity) {
+      const next = { ...config, web: identity }
+      writeJson(CONFIG_FILE, next)
+      config = next
+    },
+    json, readBody, guard,
+  }))
 
   /* ── 定时器与卸载清理 ─────────────────────────────────────────────────── */
   const timers = []

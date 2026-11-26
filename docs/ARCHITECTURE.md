@@ -32,6 +32,15 @@ The two paths are deliberately separate. Storage gives offline reads without
 keeping a permanent connection; the poll gives fresh reads without opening an
 inbound port on the Mac.
 
+## Open a paired device’s Web
+
+The Cross-device plugin uses a separate Web pairing authorization in SQLite.
+The Hub returns the paired computer’s advertised HTTPS entry after an online
+check. The browser reaches the original DSH Web directly through the operator’s
+protected network, retaining native DSH authentication and the target’s Web
+plugins. This is not a third session sync path or a window mirror. See
+[Web access setup](WEB-ACCESS.md).
+
 ## Components
 
 | Path | Responsibility |

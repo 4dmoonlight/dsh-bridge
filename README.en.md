@@ -4,8 +4,9 @@ Hub-mediated **session sync** for DeepSeek Harness (DSH). A Mac reads its local
 sessions and pushes them to a hub you control; other devices read from the hub,
 or ask it to fetch the live version from the Mac.
 
-This first release is macOS-only and **session sync only** — no terminals, files,
-attachments, or chat forwarding.
+The native clients still synchronize sessions only, not terminals, files,
+model settings or chat. The Cross-device plugin can also list paired devices and
+open the original DSH Web running on a device in a new tab.
 
 ```
 Mac (dsh-bridge)  ──push──►  hub server  ◄──list/read──  other clients
@@ -59,6 +60,14 @@ Verify:
 
 GUI: `~/.local/bin/dsh-bridge ui`.
 
+## Open remote DSH in the browser
+
+Update the Hub and the plugin on both computers, then sign into Cross-device
+with the same Google account to pair without an invitation. Give the target a
+reachable, protected HTTPS origin and enable sharing. Clicking an online
+device opens its own plugins, sidebar and sessions using its normal DSH login.
+It does not mirror a window. See [Google sign-in and Web setup](docs/WEB-ACCESS.md).
+
 ## Commands
 
 | Command | Purpose |
@@ -77,7 +86,7 @@ GUI: `~/.local/bin/dsh-bridge ui`.
 Zero dependencies:
 
 ```bash
-BRIDGE_TOKEN=secret BRIDGE_PORT=8787 BRIDGE_DATA_DIR=~/.dsh-bridge/hub-data \
+BRIDGE_PORT=8787 BRIDGE_DATA_DIR=~/.dsh-bridge/hub-data \
   node apps/server/src/index.js
 ```
 
@@ -95,20 +104,26 @@ See [docs/INSTALL.md](docs/INSTALL.md).
 ## Tests
 
 ```bash
-cd apps/server && npm test          # 12 cases: auth, sync, stale skip, restart, live hub, SSE
-cd apps/macos && swift test    # models, config, DSH v4 parsing
-bash scripts/e2e.sh            # real hub + real binary, live and stored paths
+(cd apps/server && npm test)   # Hub auth, pairing, sync and forwarding
+node --test packages/dsh-cross-device/test/*.test.js  # device panel
+(cd apps/macos && swift test)  # models, config, DSH v4 parsing
+bash scripts/e2e.sh           # native client live and stored paths
+node scripts/e2e-web.mjs      # requires the dsh CLI; isolated Web profiles and test Hub
+node scripts/e2e-web.mjs --google  # signed Google fixture, no real account
 ```
 
 ## Limits
 
-- Sessions only: no terminals, files, attachments, or model configuration.
-- Single tenant: every valid token reads every stored session.
+- Session sync does not transfer terminals, files, attachments, or model
+  configuration. The Hub does not proxy remote Web traffic.
+- Session sync is single-tenant: every valid sync token reads every stored
+  session. Web-device credentials do not grant this access.
 - No end-to-end encryption; the hub stores plaintext snapshots (2000 messages
   per session, 20k chars per message).
 - Single-process storage (atomic JSON replace); never share a data dir between
   instances.
-- macOS host only; iOS/web clients are not implemented yet (the protocol is ready).
+- The macOS host and iOS client continue to use the session-sync protocol;
+  Web pairing uses separate authorization.
 
 ## License
 

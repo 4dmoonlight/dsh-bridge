@@ -2,17 +2,18 @@
  * Hub REST 客户端:只做 HTTP 调用与错误归类,不含重试策略(重试在 index.js 的队列里)。
  */
 
-export function createHubClient({ getConfig }) {
-  async function request(method, path, body) {
+export function createHubClient({ getConfig, redirect = 'follow' }) {
+  async function request(method, path, body, { authenticated = true } = {}) {
     const cfg = getConfig()
-    if (!cfg || !cfg.hub_url || !cfg.hub_token) {
+    if (!cfg?.hub_url || (authenticated && !cfg.hub_token)) {
       throw new Error('hub_not_configured')
     }
     const url = cfg.hub_url.replace(/\/+$/, '') + path
     const res = await fetch(url, {
       method,
+      redirect,
       headers: {
-        authorization: 'Bearer ' + cfg.hub_token,
+        ...(authenticated ? { authorization: 'Bearer ' + cfg.hub_token } : {}),
         ...(body === undefined ? {} : { 'content-type': 'application/json' }),
       },
       body: body === undefined ? undefined : JSON.stringify(body),

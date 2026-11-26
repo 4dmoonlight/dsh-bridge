@@ -6,6 +6,8 @@ import { summaryOf } from './model.js';
 import { openDatabase } from './db.js';
 import { WebSocketHub } from './ws.js';
 import { createApiV1 } from './api-v1.js';
+import { createWebApi, WEB_API_PATH } from './web-api.js';
+import { createGoogleOAuth, GOOGLE_API_PATH } from './google-oauth.js';
 import { HttpError, PROTOCOL, nowIso, readJson, safeEqual, sendEmpty, sendJson } from './util.js';
 
 export const VERSION = '0.1.0';
@@ -21,6 +23,7 @@ export const VERSION = '0.1.0';
  *   now?: () => Date | string | number,
  *   wsPingIntervalMs?: number,
  *   wsPongTimeoutMs?: number,
+ *   google?: import('./google-oauth.js').GoogleOptions,
  * }} options
  */
 export async function createHubApp(options) {
@@ -39,6 +42,8 @@ export async function createHubApp(options) {
     pongTimeoutMs: options.wsPongTimeoutMs,
   });
   const api = createApiV1({ db, ws, instanceToken: options.instanceToken, bodyLimit });
+  const handleWeb = createWebApi({ db: db.web, instanceToken: options.instanceToken, bodyLimit });
+  const handleGoogle = createGoogleOAuth({ google: options.google, db: db.web, bodyLimit });
   const startedAt = Date.now();
   let closed = false;
 
@@ -89,12 +94,29 @@ export async function createHubApp(options) {
 
   /** @param {import('node:http').IncomingMessage} req @param {import('node:http').ServerResponse} res */
   async function handle(req, res) {
-    const url = new URL(req.url ?? '/', 'http://hub.local');
+    let url;
+    try {
+      url = new URL(req.url ?? '/', 'http://hub.local');
+    } catch {
+      // A URL parsing exception can contain the full input (including query secrets).
+      throw new HttpError(400, 'invalid_url');
+    }
     const path = url.pathname.replace(/\/+$/, '') || '/';
     // HTTP requires HEAD to behave like GET without a body. Node already marks the
     // response bodyless for HEAD requests, so mapping the method is enough — and it
     // keeps health checks that use `curl -I` from seeing a spurious 404.
     const method = req.method === 'HEAD' ? 'GET' : (req.method ?? 'GET');
+
+    // Public Google actions use their own proofs, never Web or sync instance
+    // auth. In particular, a HEAD probe must not consume callback state.
+    if (path === GOOGLE_API_PATH || path.startsWith(GOOGLE_API_PATH + '/')) {
+      return handleGoogle(req, res, { url, path: url.pathname, method: req.method ?? 'GET' });
+    }
+
+    // The Web plane never falls back to sync routes or their authentication.
+    if (path === WEB_API_PATH || path.startsWith(WEB_API_PATH + '/')) {
+      return handleWeb(req, res, { url, path, method });
+    }
 
     if (method === 'OPTIONS') {
       return sendEmpty(res, 204, {
