@@ -8,6 +8,8 @@ import { WebSocketHub } from './ws.js';
 import { createApiV1 } from './api-v1.js';
 import { createWebApi, WEB_API_PATH } from './web-api.js';
 import { WebRelay, RELAY_PATH } from './web-relay.js';
+import { createWebPortal } from './web-portal.js';
+import { startPortalTls } from './web-portal-tls.js';
 import { createGoogleOAuth, GOOGLE_API_PATH } from './google-oauth.js';
 import { HttpError, PROTOCOL, nowIso, readJson, safeEqual, sendEmpty, sendJson } from './util.js';
 
@@ -25,6 +27,7 @@ export const VERSION = '0.1.0';
  *   wsPingIntervalMs?: number,
  *   wsPongTimeoutMs?: number,
  *   google?: import('./google-oauth.js').GoogleOptions,
+ *   portal?: { origin: string, dataDomain: string, dataPort?: number | string },
  *   relay?: {leaseTtlMs?: number, authTimeoutMs?: number, joinTimeoutMs?: number, ackTimeoutMs?: number,
  *     pingIntervalMs?: number, pongTimeoutMs?: number},
  * }} options
@@ -47,15 +50,19 @@ export async function createHubApp(options) {
   const api = createApiV1({ db, ws, instanceToken: options.instanceToken, bodyLimit });
   const handleWeb = createWebApi({ db: db.web, instanceToken: options.instanceToken, bodyLimit });
   const relay = new WebRelay({ ...options.relay, db: db.web, bodyLimit });
-  const handleGoogle = createGoogleOAuth({ google: options.google, db: db.web, bodyLimit });
+  const portal = createWebPortal({ options: options.portal, relay });
+  const handleGoogle = createGoogleOAuth({ google: options.google, db: db.web, bodyLimit, portal });
+  if (portal && !handleGoogle.portalReady) throw Error('Web portal requires Google with a matching HTTPS callback');
   const startedAt = Date.now();
-  let closed = false;
+  let portalTls;
+  let closePromise;
 
   const server = createServer((req, res) => {
     handle(req, res).catch((error) => fail(res, error, logger));
   });
   server.on('upgrade', (req, socket, head) => {
     try {
+      if (portal?.handleUpgrade(req, socket, head)) return;
       if (!relay.handleUpgrade(req, socket, head)) api.handleUpgrade(req, socket, head);
     } catch (error) {
       logger.error?.(error);
@@ -98,6 +105,7 @@ export async function createHubApp(options) {
 
   /** @param {import('node:http').IncomingMessage} req @param {import('node:http').ServerResponse} res */
   async function handle(req, res) {
+    if (portal && await portal.handleHttp(req, res, handleGoogle.startPortal)) return;
     let url;
     try {
       url = new URL(req.url ?? '/', 'http://hub.local');
@@ -351,17 +359,30 @@ export async function createHubApp(options) {
       const actualPort = typeof address === 'object' && address ? address.port : port;
       return { port: actualPort, url: `http://${host}:${actualPort}` };
     },
-    async close() {
-      if (closed) return;
-      closed = true;
-      events.closeAll();
-      hub.close();
-      // Close upgraded sockets first: server.close() waits for connections it
-      // knows about, but WebSocket tunnels are not tracked by the HTTP server.
-      ws.close();
-      relay.close();
-      await new Promise((resolve) => server.close(() => resolve(undefined)));
-      db.close();
+    async listenPortalTls({ cert, key, port, host } = {}) {
+      if (closePromise) throw new Error('Hub is closed');
+      if (portalTls) throw new Error('Portal TLS listener already started');
+      portalTls = startPortalTls({ portal, cert, key, port, host });
+      try { return await portalTls.listening; } catch (error) {
+        portalTls = undefined;
+        throw error;
+      }
+    },
+    close() {
+      return closePromise ??= (async () => {
+        events.closeAll();
+        hub.close();
+        // Close upgraded sockets first: server.close() waits for connections it
+        // knows about, but WebSocket tunnels are not tracked by the HTTP server.
+        ws.close();
+        portal?.close();
+        relay.close();
+        await Promise.all([
+          portalTls?.close(),
+          new Promise((resolve) => server.close(() => resolve(undefined))),
+        ]);
+        db.close();
+      })();
     },
   };
 }

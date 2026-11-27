@@ -13,12 +13,16 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { runInNewContext } from 'node:vm';
 import { createHubApp } from '../apps/server/src/app.js';
+import { openDatabase } from '../apps/server/src/db.js';
 import { call, INSTANCE_TOKEN } from '../apps/server/test/helpers.js';
 
 const exec = promisify(execFile);
 const dsh = process.env.DSH_BIN || 'dsh';
 const pluginDir = fileURLToPath(new URL('../packages/dsh-cross-device/', import.meta.url));
 const localApi = '/api/cross-device/web';
+const portalDataPort = process.argv.includes('--portal-8443') ? 8443 : undefined;
+const portalMode = portalDataPort !== undefined || process.argv.includes('--portal');
+const portalOrigin = 'https://relay.example.test';
 const temp = await mkdtemp(join(tmpdir(), 'bridge-web-e2e-'));
 const children = [];
 let hub;
@@ -36,7 +40,7 @@ async function freePort() {
 // a real RSA signature, state, nonces and PKCE; this cannot contact Google.
 async function startGoogleHub() {
   const origin = 'http://127.0.0.1:' + await freePort();
-  const redirectUri = origin + '/api/v1/web/google/callback';
+  const redirectUri = (portalMode ? portalOrigin : origin) + '/api/v1/web/google/callback';
   const email = 'bridge-fixture@example.test';
   const clientId = 'bridge-fixture.apps.googleusercontent.com';
   const clientSecret = 'fixture-only-secret';
@@ -55,12 +59,13 @@ async function startGoogleHub() {
         assert.equal(body.get('redirect_uri'), redirectUri);
         const code = codes.get(body.get('code'));
         assert.ok(code, 'fixture must authorize the exchanged code once');
+        const { state, subject } = code;
         codes.delete(body.get('code'));
-        assert.equal(createHash('sha256').update(body.get('code_verifier')).digest('base64url'), code.get('code_challenge'));
+        assert.equal(createHash('sha256').update(body.get('code_verifier')).digest('base64url'), state.get('code_challenge'));
         const now = Math.floor(Date.now() / 1000);
         const jwt = b64({ alg: 'RS256', kid: key.kid, typ: 'JWT' }) + '.' + b64({
-          iss: 'https://accounts.google.com', aud: clientId, azp: clientId, sub: 'bridge-test-user',
-          iat: now, exp: now + 300, nonce: code.get('nonce'), email, email_verified: true,
+          iss: 'https://accounts.google.com', aud: clientId, azp: clientId, sub: subject,
+          iat: now, exp: now + 300, nonce: state.get('nonce'), email, email_verified: true,
         });
         return Response.json({ id_token: jwt + '.' + sign('RSA-SHA256', Buffer.from(jwt), privateKey).toString('base64url') });
       }
@@ -68,21 +73,25 @@ async function startGoogleHub() {
         throw new Error('Unexpected issuer request');
     }
   }
+  const dataDir = join(temp, 'hub');
+  const db = openDatabase({ dataDir });
+  const fixtureTarget = portalMode ? db.web.signInGoogle({ deviceId: null, subject: 'bridge-test-user', deviceName: 'target' }) : null;
   const app = await createHubApp({
-    dataDir: join(temp, 'hub'), instanceToken: INSTANCE_TOKEN, logger: { info() {}, error() {} },
+    dataDir, db, portal: portalMode ? { origin: portalOrigin, dataDomain: 'views.example.test', dataPort: portalDataPort } : undefined,
+    instanceToken: INSTANCE_TOKEN, logger: { info() {}, error() {} },
     google: {
       clientId, clientSecret, redirectUri, allowedEmails: [email], fetch: fakeGoogle,
     },
   });
   await app.listen(Number(new URL(origin).port), '127.0.0.1');
-  return { url: origin, stop: () => app.close(), authorize(state) {
+  return { url: origin, fixtureTarget, stop: () => app.close(), authorize(state, subject = 'bridge-test-user') {
     const code = randomBytes(16).toString('base64url');
-    codes.set(code, state);
+    codes.set(code, { state, subject });
     return redirectUri + '?code=' + code + '&state=' + state.get('state');
   } };
 }
 
-async function startDsh(name) {
+async function startDsh(name, fixtureWeb) {
   const home = join(temp, name);
   await mkdir(home);
   const dshHome = join(home, '.dsh');
@@ -97,6 +106,7 @@ async function startDsh(name) {
   const configPath = join(dir, 'config.json');
   await writeFile(configPath, JSON.stringify({
     device_name: name, device_id: 'sync-' + name, enabled: false, hub_url: hub.url,
+    ...(fixtureWeb ? { web: { ...fixtureWeb, hub_url: hub.url, login_provider: 'google' } } : {}),
   }), { mode: 0o600 });
 
   const port = await freePort();
@@ -147,7 +157,8 @@ function http(device, path, { method = 'GET', cookie, body, headers = {} } = {})
       res.setEncoding('utf8');
       let text = '';
       res.on('data', chunk => { text += chunk; });
-      res.on('error', reject);
+      res.on('error', cause => reject(new Error('HTTP response aborted at ' + path.split('?')[0] + ': ' +
+        Buffer.byteLength(text) + '/' + (res.headers['content-length'] ?? 'unknown') + ' bytes', { cause })));
       res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, text }));
     });
     req.setTimeout(10_000, () => req.destroy(new Error('DSH request timed out')));
@@ -237,8 +248,169 @@ async function waitForPeer(device, cookie, predicate) {
   throw new Error('Timed out waiting for device state');
 }
 
+async function portalLogin(issuer, subject) {
+  const page = await http(issuer, '/remote');
+  assert.equal(page.status, 200);
+  assert.match(page.text, /使用 Google 登录/);
+  assert.equal((await http(issuer, '/remote/api/devices')).status, 401);
+  const form = await http(issuer, '/remote/auth/start', {
+    method: 'POST', headers: { origin: issuer.origin, 'sec-fetch-site': 'same-origin',
+      'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document' },
+  });
+  assert.equal(form.status, 303, 'Google start');
+  const state = new URL(form.headers.location).searchParams;
+  const bind = form.headers['set-cookie'][0].split(';', 1)[0];
+  const callback = new URL(hub.authorize(state, subject));
+  const verified = await http(issuer, callback.pathname + callback.search, {
+    cookie: bind, headers: { 'sec-fetch-site': 'cross-site', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document' },
+  });
+  assert.equal(verified.status, 303, 'Google callback binding');
+  assert.equal(verified.headers.location, '/remote');
+  const sess = verified.headers['set-cookie'].find(c => c.startsWith('__Host-dsh-portal='));
+  assert.match(sess, /Path=\/; HttpOnly; Secure; SameSite=Lax/);
+  return sess.split(';', 1)[0];
+}
+
+async function expectMuxClose(socket, action, label) {
+  const disconnected = once(socket, 'close');
+  let timeout;
+  try {
+    const deadline = new Promise((_, reject) => {
+      timeout = setTimeout(() => reject(new Error(label + ' did not close the portal WebSocket')), 5000);
+    });
+    await Promise.race([Promise.all([action(), disconnected]), deadline]);
+  } finally {
+    clearTimeout(timeout);
+    socket.destroy();
+  }
+}
+
+async function browserPortalSmoke() {
+  const target = await startDsh('target', hub.fixtureTarget);
+  const targetOwner = await login(target);
+  const control = { origin: portalOrigin, authority: new URL(portalOrigin).host, port: Number(new URL(hub.url).port) };
+  const owner = await portalLogin(control, 'bridge-test-user');
+  const stranger = await portalLogin(control, 'different-test-user');
+  const secondOwner = await portalLogin(control, 'bridge-test-user');
+  const before = await http(control, '/remote/api/devices', { cookie: owner });
+  assert.equal(before.status, 200);
+  assert.deepEqual(JSON.parse(before.text).devices, []);
+  assert.equal((await api(target, targetOwner, '/portal-control', { enabled: true })).status, 409);
+  assert.equal((await api(target, targetOwner, '/control', { enabled: true })).status, 200);
+  await waitForPeer(target, targetOwner, value => value.control_ready === true);
+  assert.deepEqual(JSON.parse((await http(control, '/remote/api/devices', { cookie: owner })).text).devices, []);
+  assert.equal((await api(target, targetOwner, '/portal-control', { enabled: true })).status, 200);
+  await waitForPeer(target, targetOwner, value => value.control_ready === true);
+  const choices = JSON.parse((await http(control, '/remote/api/devices', { cookie: owner })).text).devices;
+  assert.equal(choices.length, 1);
+  assert.equal(choices[0].device_name, 'target');
+  assert.deepEqual(JSON.parse((await http(control, '/remote/api/devices', { cookie: stranger })).text).devices, []);
+  const select = (cookie, device = control, origin = control.origin) => http(device, '/remote/api/open', {
+    method: 'POST', cookie, body: { device_id: choices[0].device_id }, headers: { origin, 'sec-fetch-site': 'same-origin' },
+  });
+  assert.equal((await select(stranger)).status, 404);
+  assert.equal((await select(owner, control, 'https://unrelated.example.test')).status, 403);
+  const result = await select(owner);
+  assert.equal(result.status, 200);
+  const entry = new URL(JSON.parse(result.text).entry_url);
+  assert.match(entry.hostname, /^[a-f0-9]{32}\.views\.example\.test$/);
+  assert.equal(entry.port, portalDataPort ? String(portalDataPort) : '');
+  assert.equal(entry.pathname, '/_dsh/enter');
+  assert.equal(entry.search, '');
+  const view = { origin: entry.origin, authority: entry.host, port: control.port };
+  assert.equal((await http(view, '/')).status, 401);
+  assert.equal((await http(view, '/remote/api/devices', { cookie: owner })).status, 401);
+  for (const authority of ['missing.views.example.test', view.authority.toUpperCase(), entry.hostname + '.' + (entry.port ? ':' + entry.port : ''), entry.hostname + (entry.port ? '' : ':443')]) {
+    const alien = { ...view, authority };
+    assert.equal((await http(alien, '/healthz')).status, 404, 'data domains must not fall through to the Hub');
+  }
+  assert.equal((await http(control, '/healthz')).status, 200, 'control host keeps existing Hub routes');
+  const landing = await http(view, entry.pathname);
+  assert.equal(landing.status, 200);
+  const proof = { proof: entry.hash.slice(1) };
+  const redeem = (origin) => http(view, entry.pathname, { method: 'POST', body: proof, headers: { origin, 'sec-fetch-site': 'same-origin' } });
+  assert.equal((await redeem(control.origin)).status, 403);
+  let redeemed, removed = false;
+  const program = /<script>([^]*?)<\/script>/.exec(landing.text)?.[1];
+  assert.ok(program, 'data origin has an entry script');
+  await new Promise((resolve, reject) => {
+    runInNewContext(program, {
+      history: { replaceState: (_state, _title, uri) => { assert.equal(uri, entry.pathname); removed = true; } },
+      location: { hash: entry.hash, replace(uri) { assert.equal(uri, '/'); resolve(); } },
+      document: { getElementById: () => ({ set textContent(_) { reject(new Error('portal entry script failed')); } }) },
+      fetch: async (route, init) => {
+        try {
+          assert.ok(removed, 'entry removes proof before making any request');
+          assert.equal(route, entry.pathname);
+          assert.equal(init.method, 'POST');
+          assert.equal(init.referrerPolicy, 'origin');
+          assert.deepEqual(JSON.parse(init.body), proof);
+          redeemed = await redeem(view.origin);
+          assert.equal(redeemed.status, 204);
+          return { ok: true };
+        } catch (error) { reject(error); throw error; }
+      },
+    });
+  });
+  assert.equal((await redeem(view.origin)).status, 401);
+  const cookie = redeemed.headers['set-cookie'][0].split(';', 1)[0];
+  assert.match(redeemed.headers['set-cookie'][0], /^__Host-dsh-view=.*; Path=\/; HttpOnly; Secure; SameSite=Strict/);
+  const native = await http(view, '/', { cookie });
+  assert.equal(native.status, 200);
+  assert.match(native.text, /__DSH_BOOT__/);
+  assert.match(native.text, /dsh-cross-device\/client\.js/);
+  const scripts = [...native.text.matchAll(/<script[^>]+src="([^"]+)"/g)].map(match => match[1].replaceAll('&amp;', '&'));
+  const entryScript = scripts.find(path => path.startsWith('./assets/') || path.startsWith('/assets/'));
+  assert.ok(entryScript, 'native Web JS asset must be present');
+  const assetPath = new URL(entryScript, view.origin).pathname;
+  const localShell = await http(target, assetPath, { cookie: targetOwner });
+  assert.equal(localShell.status, 200);
+  const shell = await http(view, assetPath, { cookie });
+  assert.equal(shell.text, localShell.text, 'relay must serve the full native JavaScript file');
+  const combo = scripts.find(path => path.includes('plugins/??'));
+  assert.ok(combo, 'native combined Web plugin must be present');
+  assert.equal((await http(view, '/' + combo.replace(/^\//, ''), { cookie })).status, 200);
+  assert.equal(shell.status, 200, 'can load the actual native Web JS');
+  assert.match(shell.headers['content-type'], /javascript/);
+  const second = new URL(JSON.parse((await select(owner)).text).entry_url);
+  assert.notEqual(second.host, entry.host, 'each browser view has a fresh origin');
+  assert.equal((await http({ ...view, authority: second.host }, '/', { cookie })).status, 401,
+    'view cookies do not authenticate a different data origin');
+  assert.equal((await http(view, localApi + '/status', { cookie, headers: {'sec-fetch-site':'same-origin'} })).status, 404);
+  const active = await openMux(view, cookie);
+  assert.equal(active.status, 101);
+  const extra = new URL(JSON.parse((await select(secondOwner)).text).entry_url);
+  const extraView = { origin: extra.origin, authority: extra.host, port: control.port };
+  const another = await http(extraView, extra.pathname, {
+    method: 'POST', body: { proof: extra.hash.slice(1) }, headers: { origin: extra.origin, 'sec-fetch-site': 'same-origin' },
+  });
+  assert.equal(another.status, 204);
+  const extraCookie = another.headers['set-cookie'][0].split(';', 1)[0];
+  const otherStream = await openMux(extraView, extraCookie);
+  assert.equal(otherStream.status, 101);
+  const logout = origin => http(control, '/remote/api/logout', { method: 'POST', cookie: secondOwner, headers: { origin }, body: {} });
+  assert.equal((await logout(extra.origin)).status, 403, 'a data host cannot sign out the control portal');
+  await expectMuxClose(otherStream.socket, async () => {
+    const signedOut = await logout(control.origin);
+    assert.equal(signedOut.status, 204);
+    assert.match(signedOut.headers['set-cookie'][0], /Max-Age=0/);
+  }, 'portal sign-out');
+  assert.equal((await http(extraView, '/', { cookie: extraCookie })).status, 404);
+  assert.equal((await http(control, '/remote/api/devices', { cookie: secondOwner })).status, 401);
+  assert.equal((await http(view, '/', { cookie })).status, 200, 'another browser sign-out does not revoke this lease');
+  assert.equal(active.socket.destroyed, false, 'another browser sign-out does not end this connection');
+  await expectMuxClose(active.socket, async () => {
+    assert.equal((await api(target, targetOwner, '/portal-control', { enabled: false })).status, 200);
+  }, 'target revocation');
+  assert.notEqual((await http(view, '/', { cookie })).status, 200);
+  assert.deepEqual(JSON.parse((await http(control, '/remote/api/devices', { cookie: owner })).text).devices, []);
+  console.log('Browser portal E2E OK: Google identity, explicit host opt-in, original DSH Web and WS, immediate revocation');
+}
+
 try {
   hub = await startGoogleHub();
+  if (portalMode) await browserPortalSmoke();
+  else {
   const a = await startDsh('viewer');
   const b = await startDsh('target');
   assert.equal((await api(a, undefined, '/status')).status, 401);
@@ -325,6 +497,7 @@ try {
   const staleView = await http(view, '/', { cookie: browserCookie }).catch(() => ({ status: 503 }));
   assert.notEqual(staleView.status, 200, 'old relay view cannot reconnect after revocation');
   console.log('Relay Web E2E OK: Google discovery, one-click native DSH and WebSocket, immediate revocation');
+  }
 } finally {
   await Promise.all(children.map(async child => {
     if (child.exitCode !== null || child.signalCode !== null) return;

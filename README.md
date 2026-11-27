@@ -51,6 +51,8 @@ cd dsh-bridge
 
 更新 Hub 和两台电脑的插件后，在「跨设备」用同一个 Google 账号登录。在被控电脑开启「允许远程控制本机」后，就能从另一台一键打开实际运行的 DSH Web。开关默认关闭，不需要分别配置 HTTPS 地址或 Web 配对码，不镜像屏幕。见 [Google 登录和远端 Web 配置](docs/WEB-ACCESS.md)。
 
+Hub 还可选配独立网页入口：手机或没有 DSH 插件的电脑也能通过 Google 账号选设备。目标机需另外开启服务器网页访问；该模式下服务器可以读取 DSH 网页内容。见 [浏览器入口说明](docs/WEB-ACCESS.md#browser-only-entry-optional)。
+
 ## 命令
 
 | 命令 | 作用 |
@@ -90,7 +92,8 @@ BRIDGE_PORT=8787 BRIDGE_DATA_DIR=~/.dsh-bridge/hub-data \
 node --test packages/dsh-cross-device/test/*.test.js  # 设备面板
 (cd apps/macos && swift test)  # 模型、配置、DSH v4 解析
 bash scripts/e2e.sh           # 原生客户端的 live 与 stored 路径
-node scripts/e2e-web.mjs      # 需 dsh CLI；本地双实例、模拟 Google 和中转
+node scripts/e2e-web.mjs           # 需 dsh CLI；本地双实例、模拟 Google 和中转
+node scripts/e2e-web.mjs --portal  # 独立网页、原生 WebSocket 和撤权
 ```
 
 ## 已知边界

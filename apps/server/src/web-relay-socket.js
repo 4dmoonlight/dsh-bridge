@@ -1,6 +1,10 @@
 import { closePayload, encodeFrame, OPCODE, parseFrame } from './ws.js';
 
 export const MAX_CHUNK_BYTES = 32 * 1024;
+// Allow ordinary native Web assets to complete over fast local links without
+// changing the sustained allowance or the bounded per-stream buffering.
+export const RELAY_BYTE_BURST = 8 * 1024 * 1024;
+export const RELAY_BYTES_PER_SECOND = 16 * 1024 * 1024;
 const MAX_MESSAGE_BYTES = 4 * Math.ceil(MAX_CHUNK_BYTES / 3) + 256;
 const MAX_AUTH_BYTES = 2048;
 const MAX_FRAGMENTS = 64;
@@ -39,7 +43,7 @@ export class RelaySocket {
     this.buffer = Buffer.alloc(0);
     this.fragments = null;
     this.frames = new RateLimit(512, 1024);
-    this.bytes = new RateLimit(1024 * 1024, 16 * 1024 * 1024);
+    this.bytes = new RateLimit(RELAY_BYTE_BURST, RELAY_BYTES_PER_SECOND);
     socket.setNoDelay(true);
     socket.on('data', (chunk) => this.feedData(chunk));
     socket.on('end', () => this.terminate());

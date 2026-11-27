@@ -100,6 +100,7 @@ export function createRelayController(ctx) {
       current.target = createRelayTarget(ctx)
       current.error = null
       await registerRelayHost(current.identity.hub, current.identity.token, certificate.fingerprint, {
+        portalAccess: current.portalAccess,
         signal: abort.signal,
         onFrame(frame) {
           if (!validIncoming(frame)) throw relayError('relay_protocol_error')
@@ -120,14 +121,33 @@ export function createRelayController(ctx) {
     }
   }
 
+  function startControl(identity, portalAccess) {
+    // Permission is immutable for a registration. Destroy local leases and
+    // abort its streams before trying to connect the replacement generation.
+    disable()
+    control = { identity, portalAccess, abort: null, target: null, certificate: null, delay: 1000, timer: null, ready: false, incoming: 0, error: null }
+    void connectControl(control)
+  }
+
+  function hasControlIdentity(identity) {
+    return control?.identity.hub === identity.hub && control.identity.token === identity.token
+  }
+
   function enable(identity) {
     if (closed) throw relayError('relay_closed')
-    if (control?.identity.hub === identity.hub && control.identity.token === identity.token) return
+    if (hasControlIdentity(identity)) return
     ensureLoopback()
     if (typeof WebSocket !== 'function') throw relayError('relay_not_supported', 503)
-    disable()
-    control = { identity, abort: null, target: null, certificate: null, delay: 1000, timer: null, ready: false, incoming: 0, error: null }
-    void connectControl(control)
+    startControl(identity, false)
+  }
+
+  function setPortalAccess(identity, enabled) {
+    if (!hasControlIdentity(identity)) {
+      if (enabled) throw relayError('remote_control_required', 409)
+      if (control?.portalAccess) disable()
+      return
+    }
+    if (control.portalAccess !== enabled) startControl(identity, enabled)
   }
 
   async function open(identity, deviceId, requestLease, closeLease) {
@@ -241,8 +261,9 @@ export function createRelayController(ctx) {
   }
 
   return {
-    enable, disable, open,
+    enable, disable, setPortalAccess, open,
     enabled: () => control !== null,
+    portalAccessEnabled: () => control?.portalAccess === true,
     ready: () => control?.ready === true,
     error: () => control?.error || null,
     close() {

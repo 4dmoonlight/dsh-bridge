@@ -62,7 +62,7 @@ multi-tenant and it is **not** end-to-end encrypted.
   invitation or a claimed email. The target only accepts new relay streams while
   its opt-in is active and destroys all of them when disabled or disconnected.
 - The viewing browser connects to a temporary loopback port and a fresh
-  per-view hostname under .localhost for browser cookie isolation. The two plugins
+  per-view hostname under .localhost for browser cookie isolation. In plugin-to-plugin mode, the plugins
   communicate over TLS inside outbound relay WebSockets. The Hub sees identity
   and routing metadata and vouches for the target certificate fingerprint; it
   does not receive the browser entry proof, DSH cookies or plaintext page traffic
@@ -75,6 +75,18 @@ multi-tenant and it is **not** end-to-end encrypted.
 - Revoking access closes both HTTP and upgraded streams, but does not undo DSH
   actions already taken or revoke separate direct access. The older direct-URL
   API is retained for backward compatibility. See [Web access setup](WEB-ACCESS.md).
+
+## Optional browser portal
+
+- The target must consent separately on its local DSH. The HTTPS edge and Hub
+  can see plaintext DSH traffic and have owner access within the lease. The
+  existing mode with two plugins does not expose this traffic to the Hub.
+- Browser sign-in uses Google and an expiring, in-memory login session instead
+  of granting a persistent Web device credential. Every DSH view uses a distinct
+  HTTPS origin and a separate host-only cookie. Deploy the view domain solely
+  for this service, with authenticated TLS to the Hub, no edge rewriting, and
+  no traffic logging or caching. Never put proxied DSH content on the control
+  origin. See [portal deployment](WEB-ACCESS.md#browser-only-entry-optional).
 
 ## Hardening checklist before exposing it
 

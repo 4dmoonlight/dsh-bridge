@@ -68,6 +68,10 @@ by default. Click the target device to open its DSH Web, with its own plugins,
 sidebar and sessions. There is no per-device HTTPS address, Web pairing code,
 or desktop mirror. See [Google sign-in and Web setup](docs/WEB-ACCESS.md).
 
+An optional Hub portal lets a phone or another computer connect with Google
+using only a browser. The target must opt in separately, and the server can
+read DSH traffic in this mode. See [browser-only access](docs/WEB-ACCESS.md#browser-only-entry-optional).
+
 ## Commands
 
 | Command | Purpose |
@@ -108,7 +112,8 @@ See [docs/INSTALL.md](docs/INSTALL.md).
 node --test packages/dsh-cross-device/test/*.test.js  # device panel
 (cd apps/macos && swift test)  # models, config, DSH v4 parsing
 bash scripts/e2e.sh           # native client live and stored paths
-node scripts/e2e-web.mjs      # requires the dsh CLI; two local profiles, simulated Google and relay
+node scripts/e2e-web.mjs           # requires the dsh CLI; two local profiles, simulated Google and relay
+node scripts/e2e-web.mjs --portal  # browser-only, native WebSocket and revocation
 ```
 
 ## Limits

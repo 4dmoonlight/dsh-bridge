@@ -59,6 +59,31 @@ password: anyone holding it can read every stored session.
 
 The hub binds @@127.0.0.1@@ on purpose: only the TLS proxy reaches it.
 
+## Verify the optional browser portal
+
+Enable this only on a Hub and HTTPS edge trusted to handle decrypted DSH
+traffic. See [browser portal configuration](WEB-ACCESS.md#browser-only-entry-optional).
+The marketing or preview site's certificate is not evidence that random view
+hosts are covered. Before testing with real data:
+
+1. Use a fresh, arbitrary DNS label under the dedicated data domain to test
+   DNS, the TLS certificate and forwarding of the original Host. On this
+   unleased host, /healthz must return HTTP 404 from the portal, not the Hub
+   health page. The control origin must still return HTTP 200 for /healthz.
+2. Verify GET /remote serves the login page over HTTPS and that
+   /remote/api/devices returns HTTP 401 with no session. Confirm the edge
+   bypasses caching, preserves WebSocket upgrades and rate-limits new sign-ins.
+3. Use an opted-in test device and a modern browser, with no viewer plugin:
+   sign in, verify the distinct HTTPS view hostname, load native JS and open
+   the native WebSocket. Another account must not see or open the device.
+4. Sign out and verify the browser's view disconnects. Reopen it, turn off
+   server-web access on the target, and verify the old view cannot reconnect.
+   Do not enable either switch automatically during rollout.
+
+On rollback, disable the data-origin edge route first, then revert or disable
+the Hub portal. An older Hub or a Hub with the portal disabled must not receive
+requests from the wildcard data origin.
+
 ## Parameters
 
 | Flag | Default | Meaning |

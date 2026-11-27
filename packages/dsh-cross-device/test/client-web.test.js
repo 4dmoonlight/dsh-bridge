@@ -11,6 +11,7 @@ const entryHost = '11111111111111111111111111111111.dsh-relay.localhost'
 const entryRoot = 'http://' + entryHost + ':59182/dsh-relay-enter'
 const entry = entryRoot + '#' + entrySecret
 const googleStart = '/web/google/start'
+const portalControl = '/web/portal-control'
 const googleEndpoint = 'https://accounts.google.com/o/oauth2/v2/auth'
 const googleAuthorization = googleEndpoint + '?' + new URLSearchParams({
   client_id: 'bridge.apps.googleusercontent.com', response_type: 'code', scope: 'openid email profile',
@@ -94,13 +95,13 @@ function mount(t, route, options = {}) {
     assert.equal(timers.size, 0)
     assert.equal(listeners.size, 0)
     for (const { url, path, init, body } of requests) {
-      assert.match(url, /^\/api\/cross-device\/web\/(?:status|control|open|google\/start)$/)
+      assert.match(url, /^\/api\/cross-device\/web\/(?:status|control|portal-control|open|google\/start)$/)
       assert.equal(init.headers['x-cross-device'], '1')
       assert.equal(init.mode, 'same-origin')
       assert.equal(init.credentials, 'same-origin')
       assert.equal(init.redirect, 'error')
       assert.equal(init.cache, 'no-store')
-      assert.equal(init.referrerPolicy, path === googleStart || path === '/web/control' ? 'origin' : undefined)
+      assert.equal(init.referrerPolicy, [googleStart, '/web/control', portalControl].includes(path) ? 'origin' : undefined)
       assert.equal(init.headers.authorization, undefined)
       if (init.method === 'POST') {
         assert.equal(init.headers['content-type'], 'application/json')
@@ -126,6 +127,8 @@ const input = (tree, label) => nodes(tree, 'label').find((node) => node.children
 const change = (tree, label, value) => input(tree, label).props.onChange({ target: { value } })
 const control = (tree) => input(tree, '允许远程控制本机')
 const toggle = (tree, checked) => control(tree).props.onChange({ target: { checked } })
+const portal = (tree) => input(tree, '允许从服务器网页访问本机')
+const togglePortal = (tree, checked) => portal(tree).props.onChange({ target: { checked } })
 function popup() {
   const destinations = []
   const tab = {
@@ -474,6 +477,82 @@ test('defaults control to off and confirms native owner access only when enablin
   assert.match(text(tree), /其他设备无法再通过中继访问本机/)
   assert.equal(confirmations, 2, 'turning off must not prompt again')
   assert.deepEqual(panel.requests.filter((req) => req.path === '/web/control').map((req) => req.body), [{ enabled: true }, { enabled: false }])
+})
+
+test('requires separate plaintext and owner consent for server browser access', async (t) => {
+  let current = signedOut()
+  let approved = false
+  const confirmations = []
+  const panel = mount(t, ({ path, body }) => {
+    if (path === '/web/status') return current
+    if (path === portalControl) current = { ...current, portal_access_enabled: body.enabled }
+    else {
+      assert.equal(path, '/web/control')
+      current = status({ remote_control_enabled: body.enabled })
+    }
+    return { ok: true }
+  }, { confirm(message) { confirmations.push(message); return approved } })
+  panel.render()
+  assert.equal(portal(await panel.settle()), undefined)
+  current = status()
+  panel.focus()
+  let tree = await panel.settle()
+  assert.equal(portal(tree).props.role, 'switch')
+  assert.equal(portal(tree).props.checked, false, 'old status without portal_access_enabled defaults to off')
+  assert.equal(portal(tree).props.disabled, true)
+  togglePortal(tree, true)
+  assert.equal(confirmations.length, 0)
+
+  approved = true
+  toggle(tree, true)
+  tree = await panel.settle()
+  assert.equal(control(tree).props.checked, true)
+  assert.equal(portal(tree).props.checked, false)
+  assert.equal(portal(tree).props.disabled, false)
+  approved = false
+  togglePortal(tree, true)
+  assert.match(confirmations[0], /同一 Google 账号.*所有者/)
+  assert.match(confirmations[1], /中继（Hub）和终止 TLS 的服务器.*整个中继租约期间.*明文 DSH 内容.*DSH 所有者/)
+  assert.equal(panel.requests.some(({ path }) => path === portalControl), false)
+  approved = true
+  togglePortal(tree, true)
+  tree = await panel.settle()
+  assert.equal(portal(tree).props.checked, true)
+  assert.deepEqual(panel.requests.find(({ path }) => path === portalControl).body, { enabled: true })
+
+  toggle(tree, false)
+  tree = await panel.settle()
+  assert.equal(control(tree).props.checked, false)
+  assert.equal(portal(tree).props.checked, false)
+  assert.equal(portal(tree).props.disabled, true)
+  assert.equal(confirmations.length, 3, 'turning off must not prompt again')
+})
+
+test('can turn off portal access locally during a Hub outage and stale refresh', async (t) => {
+  const stale = deferred()
+  let current = status({ remote_control_enabled: true, portal_access_enabled: true, web_error: 'relay_unavailable' })
+  let reads = 0
+  const panel = mount(t, ({ path, body }) => {
+    if (path === '/web/status') return ++reads === 2 ? stale.promise : current
+    assert.equal(path, portalControl)
+    assert.deepEqual(body, { enabled: false })
+    current = { ...current, portal_access_enabled: false }
+    return { ok: true }
+  }, { confirm() { assert.fail('revocation never requires confirmation') } })
+  panel.render()
+  let tree = await panel.settle()
+  assert.equal(portal(tree).props.checked, true)
+  assert.equal(portal(tree).props.disabled, false)
+  panel.focus()
+  const obsolete = panel.requests.at(-1)
+  togglePortal(panel.render(), false)
+  assert.equal(obsolete.init.signal.aborted, true)
+  tree = await panel.settle()
+  assert.equal(control(tree).props.checked, true)
+  assert.equal(portal(tree).props.checked, false)
+  assert.equal(portal(tree).props.disabled, true)
+  stale.resolve(status({ remote_control_enabled: true, portal_access_enabled: true, control_ready: true }))
+  assert.equal(portal(await panel.settle()).props.checked, false)
 })
 
 test('can revoke control despite an unreachable Hub and prevents stale polling from restoring the switch', async (t) => {

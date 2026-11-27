@@ -199,6 +199,24 @@ socket closes. The control socket receives only routing information, not the
 entry grant. Browser traffic is carried by a separate TLS session across the
 two data socket legs, using bounded base64 chunks and flow-control acknowledgments.
 
+## Optional browser portal (additive)
+
+- The configured HTTPS control host serves /remote. Its POST /remote/auth/start
+  uses the existing Google OAuth callback with a separate one-use state and
+  initiating-browser proof. Verification does not register a Web device or
+  issue a persistent Web token. The portal session is an in-memory host-only
+  cookie; it does not confer access to other Hub endpoints.
+- The portal lists and opens only live same-subject devices whose current
+  authenticated host registration opts in with the exact portal_access:true
+  field. Omitted fields preserve the existing desktop behavior. Switching
+  portal permission replaces the target generation, revoking active leases.
+- Each view uses a fresh HTTPS hostname on the configured data domain. The
+  browser exchanges a short-lived one-use fragment proof for a separate
+  host-only cookie; the underlying Web relay’s grant and cookie stay on the
+  Hub, which relays only to the TLS certificate pinned for the leased target.
+  Targets receive normal synthetic loopback Host/Origin and native MUX frames.
+  Sign-out, lease expiry, or target generation loss ends relay access.
+
 ## Versioning
 
 The string `bridge/1` is sent in `/healthz`, `/v1/meta`, register and sync.

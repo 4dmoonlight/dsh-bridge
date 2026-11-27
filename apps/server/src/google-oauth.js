@@ -4,13 +4,15 @@ import { WEB_API_PATH } from './web-api.js';
 
 export const GOOGLE_API_PATH = WEB_API_PATH + '/google';
 const CALLBACK_PATH = GOOGLE_API_PATH + '/callback';
+const PORTAL_START_PATH = '/remote/auth/start';
+const PORTAL_BINDING_COOKIE = '__Host-dsh-portal-google';
 const RETURN_PATH = '/dsh-bridge-google';
 const AUTHORIZATION_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const JWKS_URL = 'https://www.googleapis.com/oauth2/v3/certs';
 const FLOW_TTL_MS = 10 * 60_000;
 const GRANT_TTL_MS = 2 * 60_000;
-const MAX_FLOWS = 256;
+const FLOW_LIMITS = { web: 256, portal: 64 };
 const MAX_BODY_BYTES = 8 * 1024;
 const MAX_PROVIDER_BYTES = 64 * 1024;
 const PROVIDER_TIMEOUT_MS = 5_000;
@@ -24,18 +26,26 @@ const NO_LEAK_HEADERS = {
 };
 
 /** @typedef {{clientId: string, clientSecret: string, redirectUri: string, allowedEmails: string[], returnOrigins?: string[], fetch?: typeof fetch}} GoogleOptions */
+/** @typedef {{origin: string, completeAuthentication: (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse, identity: {subject: string}) => void}} GooglePortalOptions */
 
-export function createGoogleOAuth({ google, db, bodyLimit }) {
+export function createGoogleOAuth({ google, db, bodyLimit, portal }) {
   const config = googleConfig(google);
+  const portalOrigin = config && canonicalOrigin(portal?.origin);
+  const completePortal = portalOrigin?.protocol === 'https:' && portalOrigin.origin + CALLBACK_PATH === config.redirectUri &&
+    typeof portal.completeAuthentication === 'function' ? portal.completeAuthentication.bind(portal) : null;
   const now = () => db.now();
   const verifyIdToken = config && createIdTokenVerifier(config, now);
   // In-memory and neither portable across Hub instances nor recoverable by polling.
-  // Pending, exchanging, and approved flows all share the same bounded capacity.
+  // Each purpose has a bounded budget, including exchanges and pending grants.
   const flows = new Map();
+  const purposeCounts = { web: 0, portal: 0 };
   const byState = new Map();
 
   function remove(flow) {
-    if (flows.get(flow.id) === flow) flows.delete(flow.id);
+    if (flows.get(flow.id) === flow) {
+      flows.delete(flow.id);
+      purposeCounts[flow.purpose]--;
+    }
     if (flow.pending) byState.delete(flow.pending.state);
   }
 
@@ -81,22 +91,64 @@ export function createGoogleOAuth({ google, db, bodyLimit }) {
       throw new HttpError(400, 'invalid_return_origin');
     }
     if (!isSecret(body.challenge)) throw new HttpError(400, 'invalid_challenge');
-    const time = purgeExpired();
-    if (flows.size >= MAX_FLOWS) throw new HttpError(429, 'google_flow_limit');
+    const flow = beginFlow({
+      purpose: 'web', deviceId, deviceName, returnOrigin: origin.origin,
+      challenge: body.challenge, approved: null,
+    });
+    sendJson(res, 200, {
+      flow_id: flow.id, authorization_url: authorizationUrl(flow), expires_at: new Date(flow.expiresAt).toISOString(),
+    }, NO_LEAK_HEADERS);
+  }
 
+  async function startPortal(req, res) {
+    try {
+      if (req.method !== 'POST' || req.url !== PORTAL_START_PATH) throw new HttpError(404, 'not_found');
+      if (!completePortal) throw new HttpError(404, 'google_portal_disabled');
+      if (!exactHeader(req, 'host', portalOrigin.host) || !exactHeader(req, 'origin', portalOrigin.origin) ||
+          !optionalExactHeader(req, 'sec-fetch-site', 'same-origin') || !isDocumentNavigation(req)) {
+        throw new HttpError(403, 'forbidden');
+      }
+      // The form supplies no inputs to OAuth, but apply the same request size
+      // bounds as Web sign-in, including to chunked requests.
+      const limit = Math.min(bodyLimit, MAX_BODY_BYTES);
+      if (Number(req.headers['content-length']) > limit) throw new HttpError(413, 'payload_too_large');
+      let bytes = 0;
+      for await (const chunk of req.iterator({ destroyOnReturn: false })) {
+        bytes += chunk.length;
+        if (bytes > limit) {
+          req.resume();
+          throw new HttpError(413, 'payload_too_large');
+        }
+      }
+      const binding = randomSecret();
+      const flow = beginFlow({ purpose: 'portal', bindingHash: sha256Url(binding) });
+      sendEmpty(res, 303, {
+        ...NO_LEAK_HEADERS,
+        'set-cookie': portalBindingCookie(binding, FLOW_TTL_MS / 1000),
+        location: authorizationUrl(flow),
+      });
+    } catch (error) {
+      return fail(res, error);
+    }
+  }
+
+  function beginFlow(details) {
+    const time = purgeExpired();
+    if (purposeCounts[details.purpose] >= FLOW_LIMITS[details.purpose]) throw new HttpError(429, 'google_flow_limit');
     let id, state;
     do { id = randomSecret(); } while (flows.has(id));
     do { state = randomSecret(); } while (byState.has(state));
-    const nonce = randomSecret();
-    const providerVerifier = randomSecret();
-    const expiresAt = time + FLOW_TTL_MS;
     const flow = {
-      id, deviceId, deviceName, expiresAt, returnOrigin: origin.origin,
-      challenge: body.challenge, pending: { state, nonce, providerVerifier }, approved: null,
+      ...details, id, expiresAt: time + FLOW_TTL_MS,
+      pending: { state, nonce: randomSecret(), providerVerifier: randomSecret() },
     };
     flows.set(id, flow);
+    purposeCounts[flow.purpose]++;
     byState.set(state, flow);
+    return flow;
+  }
 
+  function authorizationUrl({ pending: { state, nonce, providerVerifier } }) {
     const url = new URL(AUTHORIZATION_URL);
     url.search = new URLSearchParams({
       client_id: config.clientId,
@@ -108,14 +160,27 @@ export function createGoogleOAuth({ google, db, bodyLimit }) {
       code_challenge: sha256Url(providerVerifier),
       code_challenge_method: 'S256',
     }).toString();
-    sendJson(res, 200, { flow_id: id, authorization_url: url.href, expires_at: new Date(expiresAt).toISOString() }, NO_LEAK_HEADERS);
+    return url.href;
   }
 
-  async function callback(res, params) {
+  async function callback(req, res, params) {
     purgeExpired();
     const state = singleParam(params, 'state');
     const flow = isSecret(state) && byState.get(state);
     if (!flow) throw new HttpError(400, 'invalid_google_state');
+    const isPortal = flow.purpose === 'portal';
+    if (isPortal) {
+      const binding = readPortalBinding(req);
+      // Google's cross-site GET may carry the Lax cookie; require a top-level
+      // document navigation, not a same-origin fetch or an embedded frame.
+      if (req.method !== 'GET' || !req.url?.startsWith(CALLBACK_PATH + '?') || req.url.includes('#') ||
+          !exactHeader(req, 'host', portalOrigin.host) || !optionalExactHeader(req, 'origin', portalOrigin.origin) ||
+          !isDocumentNavigation(req) ||
+          !binding || !safeEqual(sha256Url(binding), flow.bindingHash)) {
+        throw new HttpError(400, 'invalid_google_state');
+      }
+      res.appendHeader('set-cookie', portalBindingCookie('', 0));
+    }
     // Consume before the first await, even when Google returned an error. An
     // overlapping callback cannot exchange the same state or mint a second grant.
     const { nonce, providerVerifier } = flow.pending;
@@ -123,7 +188,9 @@ export function createGoogleOAuth({ google, db, bodyLimit }) {
     flow.pending = null;
     try {
       const code = singleParam(params, 'code');
-      if (params.has('error') || !isPrintable(code, 4096)) throw new HttpError(400, 'google_callback_failed');
+      if (params.has('error') || !isPrintable(code, 4096) || (isPortal && new Set(params.keys()).size !== params.size)) {
+        throw new HttpError(400, 'google_callback_failed');
+      }
       const { data } = await providerJson(config.fetch, TOKEN_URL, {
         method: 'POST',
         headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
@@ -140,6 +207,15 @@ export function createGoogleOAuth({ google, db, bodyLimit }) {
       const subject = await verifyIdToken(data.id_token, nonce);
       const time = now();
       if (flow.expiresAt <= time || flows.get(flow.id) !== flow) throw new HttpError(400, 'invalid_google_state');
+      if (isPortal) {
+        remove(flow);
+        for (const [name, value] of Object.entries(NO_LEAK_HEADERS)) res.setHeader(name, value);
+        res.setHeader('cache-control', 'no-store');
+        // The portal owns the independent session cookie and fixed /remote
+        // redirect. It must append its own Set-Cookie to the binding deletion.
+        try { completePortal(req, res, { subject }); } catch { throw new HttpError(500, 'internal_error'); }
+        return;
+      }
       const grant = randomSecret();
       flow.approved = { subject, grantHash: sha256Url(grant) };
       flow.expiresAt = Math.min(flow.expiresAt, time + GRANT_TTL_MS);
@@ -157,7 +233,7 @@ export function createGoogleOAuth({ google, db, bodyLimit }) {
     const { flow_id: id, grant, verifier } = await readBody(req);
     purgeExpired();
     const flow = typeof id === 'string' && /^[A-Za-z0-9_-]{24,64}$/.test(id) && flows.get(id);
-    if (!flow?.approved || !isSecret(grant) || typeof verifier !== 'string' || !/^[A-Za-z0-9._~-]{43,128}$/.test(verifier) ||
+    if (flow?.purpose !== 'web' || !flow.approved || !isSecret(grant) || typeof verifier !== 'string' || !/^[A-Za-z0-9._~-]{43,128}$/.test(verifier) ||
         !safeEqual(sha256Url(grant), flow.approved.grantHash) || !safeEqual(sha256Url(verifier), flow.challenge)) {
       throw new HttpError(400, 'invalid_google_grant');
     }
@@ -186,7 +262,7 @@ export function createGoogleOAuth({ google, db, bodyLimit }) {
     sendJson(res, 200, result, NO_LEAK_HEADERS);
   }
 
-  return async function handleGoogle(req, res, { url, path, method }) {
+  async function handleGoogle(req, res, { url, path, method }) {
     try {
       const route = method + ' ' + path;
       if (route === 'GET ' + GOOGLE_API_PATH + '/status' || route === 'HEAD ' + GOOGLE_API_PATH + '/status') {
@@ -195,18 +271,57 @@ export function createGoogleOAuth({ google, db, bodyLimit }) {
       if (!config) throw new HttpError(404, 'google_disabled');
       if (url.searchParams.has('token') || url.searchParams.has('access_token')) throw new HttpError(401, 'unauthorized');
       if (route === 'POST ' + GOOGLE_API_PATH + '/start') return await start(req, res);
-      if (route === 'GET ' + CALLBACK_PATH) return await callback(res, url.searchParams);
+      if (route === 'GET ' + CALLBACK_PATH) return await callback(req, res, url.searchParams);
       if (route === 'POST ' + GOOGLE_API_PATH + '/redeem') return await redeem(req, res);
       throw new HttpError(404, 'not_found');
     } catch (error) {
-      // Provider and database failures must not log or echo codes, credentials,
-      // claims, request URLs, provider payloads, or exception details.
-      if (res.headersSent || res.destroyed) return res.end();
-      const status = error instanceof HttpError ? error.status : 500;
-      const code = error instanceof HttpError ? error.code : 'internal_error';
-      return sendJson(res, status, { error: { code } }, NO_LEAK_HEADERS);
+      return fail(res, error);
     }
-  };
+  }
+  handleGoogle.startPortal = startPortal;
+  handleGoogle.portalReady = Boolean(completePortal);
+  return handleGoogle;
+}
+
+function fail(res, error) {
+  // Provider and database failures must not log or echo codes, credentials,
+  // claims, request URLs, provider payloads, or exception details.
+  if (res.headersSent || res.destroyed) return res.end();
+  const status = error instanceof HttpError ? error.status : 500;
+  const code = error instanceof HttpError ? error.code : 'internal_error';
+  return sendJson(res, status, { error: { code } }, NO_LEAK_HEADERS);
+}
+
+function exactHeader(req, name, value) {
+  return req.headers[name] === value && req.headersDistinct[name]?.length === 1;
+}
+
+function optionalExactHeader(req, name, value) {
+  return req.headers[name] === undefined || exactHeader(req, name, value);
+}
+
+function isDocumentNavigation(req) {
+  // Some browsers omit Fetch Metadata; when present it must describe a
+  // top-level navigation. Exact Host and the independent proofs are mandatory.
+  return optionalExactHeader(req, 'sec-fetch-mode', 'navigate') && optionalExactHeader(req, 'sec-fetch-dest', 'document');
+}
+
+function portalBindingCookie(value, maxAge) {
+  return PORTAL_BINDING_COOKIE + '=' + value + '; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=' + maxAge;
+}
+
+function readPortalBinding(req) {
+  if (typeof req.headers.cookie !== 'string') return null;
+  let binding = null;
+  for (const part of req.headers.cookie.split(';')) {
+    const pair = part.trim();
+    const equals = pair.indexOf('=');
+    if ((equals === -1 ? pair : pair.slice(0, equals)).trim() !== PORTAL_BINDING_COOKIE) continue;
+    if (binding !== null || equals === -1) return null;
+    binding = pair.slice(equals + 1);
+    if (!isSecret(binding)) return null;
+  }
+  return binding;
 }
 
 function canonicalOrigin(value) {

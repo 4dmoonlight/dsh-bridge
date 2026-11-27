@@ -120,12 +120,15 @@ export function registerWebAccess({ ctx, getConfig, saveIdentity, json, readBody
       login_provider: identity?.login_provider === 'google' ? 'google' : null,
       hub_url: identity?.hub_url || syncHub || '',
       device_name: deviceName(),
-      remote_control_enabled: relay.enabled(),
-      control_ready: false,
-      ...(relay.error() ? { control_error: errorCode({ message: relay.error() }) } : {}),
       devices: [],
     }
-    if (identity?.login_provider !== 'google') return result
+    const localControl = (hubReady = false) => ({
+      remote_control_enabled: relay.enabled(),
+      portal_access_enabled: relay.portalAccessEnabled(),
+      control_ready: hubReady && relay.ready(),
+      ...(relay.error() ? { control_error: errorCode({ message: relay.error() }) } : {}),
+    })
+    if (identity?.login_provider !== 'google') return { ...result, ...localControl() }
     let data
     try {
       data = await forDevice(identity, 'GET', '/relay/devices')
@@ -133,7 +136,7 @@ export function registerWebAccess({ ctx, getConfig, saveIdentity, json, readBody
     } catch (err) {
       // Keep local sharing controls available even when the Hub is unreachable.
       // Do not return stale peers or fall back to the unscoped sync sidebar.
-      return { ...result, web_error: err?.status === 404 ? 'relay_not_ready' : errorCode(err) }
+      return { ...result, ...localControl(), web_error: err?.status === 404 ? 'relay_not_ready' : errorCode(err) }
     }
     result.devices = data.devices.filter(d =>
       typeof d?.device_id === 'string' && DEVICE_ID.test(d.device_id) && d.device_id !== identity.device_id &&
@@ -142,8 +145,7 @@ export function registerWebAccess({ ctx, getConfig, saveIdentity, json, readBody
       device_id: d.device_id, device_name: d.device_name, status: d.status,
       web_enabled: d.web_enabled === true,
     }))
-    result.control_ready = relay.ready() && data.control_ready === true
-    return result
+    return { ...result, ...localControl(data.control_ready === true) }
   }
 
   function requireGoogleIdentity() {
@@ -171,6 +173,14 @@ export function registerWebAccess({ ctx, getConfig, saveIdentity, json, readBody
     // Opt in for this running DSH instance only. Restarts never grant remote access.
     if (body.enabled) relay.enable(relayIdentity(identity))
     else relay.disable()
+    return { ok: true }
+  }
+
+  function setPortalControl(body, req) {
+    requireLocalControl(req)
+    if (typeof body.enabled !== 'boolean') throw failure('invalid_body')
+    const identity = requireGoogleIdentity()
+    relay.setPortalAccess(relayIdentity(identity), body.enabled)
     return { ok: true }
   }
 
@@ -211,6 +221,7 @@ export function registerWebAccess({ ctx, getConfig, saveIdentity, json, readBody
 
   register('/status', 'GET', status)
   register('/control', 'POST', setControl)
+  register('/portal-control', 'POST', setPortalControl)
   register('/open', 'POST', open)
   register('/google/start', 'POST', google.start, true)
   register('/google/complete', 'POST', google.complete, true)

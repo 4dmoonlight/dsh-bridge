@@ -1,7 +1,8 @@
+import { Duplex } from 'node:stream';
 import { HttpError, randomId, readJson, sendJson } from './util.js';
 import { bearerOf } from './web-api.js';
 import { acceptHandshake, PING_INTERVAL_MS, PONG_TIMEOUT_MS, rejectUpgrade } from './ws.js';
-import { MAX_CHUNK_BYTES, RateLimit, RelaySocket } from './web-relay-socket.js';
+import { MAX_CHUNK_BYTES, RateLimit, RelaySocket, RELAY_BYTE_BURST, RELAY_BYTES_PER_SECOND } from './web-relay-socket.js';
 
 export const RELAY_PATH = '/api/v1/web/relay';
 const MAX_LEASE_TTL = 30 * 60_000;
@@ -50,8 +51,120 @@ function validId(value) {
   return typeof value === 'string' && value.length === 32 && /^[A-Za-z0-9_-]+$/.test(value);
 }
 
-/** In-memory rendezvous only: Hub never dials a target or handles plaintext application data. */
+function validateSubjectHash(subjectHash) {
+  if (typeof subjectHash !== 'string' || subjectHash.length !== 64 || !/^[a-f0-9]+$/.test(subjectHash)) {
+    throw new HttpError(400, 'invalid_subject_hash');
+  }
+}
+
+function validateLeaseFields(deviceId, authority, grantHash) {
+  if (typeof deviceId !== 'string' || !deviceId || deviceId.length > 200) {
+    throw new HttpError(400, 'invalid_device_id');
+  }
+  if (!validAuthority(authority)) throw new HttpError(400, 'invalid_authority');
+  if (!validGrantHash(grantHash)) throw new HttpError(400, 'invalid_grant_hash');
+}
+
+// Adapt the existing relay messages to a local ciphertext-only Duplex. Neither
+// this endpoint nor its virtual viewer identity can authenticate over public WS.
+function createPortalViewer({ signal, resolve, reject, onMessage, onClose }) {
+  let detached = false;
+  let receivePending = false;
+  let writeState = null;
+  const frames = new RateLimit(512, 1024);
+  const bytes = new RateLimit(RELAY_BYTE_BURST, RELAY_BYTES_PER_SECOND);
+  const endpoint = {
+    role: 'viewer',
+    send(frame) {
+      if (detached || transport.destroyed) return false;
+      switch (frame.type) {
+        case 'connected': resolve(transport); break;
+        case 'data':
+          if (transport.push(Buffer.from(frame.data, 'base64'))) send({ type: 'ack' });
+          else receivePending = true;
+          break;
+        case 'ack': {
+          const state = writeState;
+          if (state.offset === state.bytes.length) {
+            writeState = null;
+            state.complete();
+          } else sendChunk();
+          break;
+        }
+        case 'end': transport.push(null); break;
+        default: return false;
+      }
+      return !transport.destroyed;
+    },
+    close(code, reason) {
+      // Both ends sent EOF. Leave already-buffered ciphertext readable.
+      if (code === 1000) return detach();
+      const status = { lease_not_found: 404, rate_limited: 429, join_timeout: 504 }[reason] ?? 502;
+      transport.destroy(new HttpError(status, reason));
+    },
+  };
+
+  function detach() {
+    if (detached) return;
+    detached = true;
+    onClose(endpoint);
+    endpoint.stream = null;
+  }
+
+  function send(frame) {
+    if (detached || transport.destroyed) return;
+    // Charge the encoded chunk and a small allowance for the framing envelope.
+    if (!frames.take() || !bytes.take(32 + (frame.data?.length ?? 0))) {
+      return endpoint.close(1008, 'rate_limited');
+    }
+    try {
+      onMessage(endpoint, frame);
+    } catch {
+      endpoint.close(1011, 'relay_error');
+    }
+  }
+
+  function sendChunk() {
+    const state = writeState;
+    const part = state.bytes.subarray(state.offset, state.offset + MAX_CHUNK_BYTES);
+    state.offset += part.length;
+    send({ type: 'data', data: part.toString('base64') });
+  }
+
+  const transport = new Duplex({
+    signal, highWaterMark: 2 * MAX_CHUNK_BYTES, allowHalfOpen: true,
+    read() {
+      if (!receivePending) return;
+      receivePending = false;
+      send({ type: 'ack' });
+    },
+    write(chunk, _encoding, complete) {
+      if (!chunk.length) return complete();
+      writeState = { bytes: chunk, offset: 0, complete };
+      sendChunk();
+    },
+    final(complete) {
+      send({ type: 'end' });
+      complete(transport.errored);
+    },
+    destroy(error, complete) {
+      detach();
+      const failure = error ?? new HttpError(502, 'relay_closed');
+      reject(failure);
+      const state = writeState;
+      writeState = null;
+      state?.complete(failure);
+      complete(error);
+    },
+  });
+  transport.on('error', () => {}); // Revocation may race the consumer attaching its listener.
+  return endpoint;
+}
+
+/** In-memory rendezvous: the relay never dials a target or handles plaintext application data. */
 export class WebRelay {
+  #portalViewers = new Set();
+
   constructor({ db, bodyLimit, leaseTtlMs = DEFAULT_LEASE_TTL, authTimeoutMs = 5000, joinTimeoutMs = 10_000,
     ackTimeoutMs = 30_000, pingIntervalMs = PING_INTERVAL_MS, pongTimeoutMs = PONG_TIMEOUT_MS }) {
     this.db = db;
@@ -101,41 +214,98 @@ export class WebRelay {
     if (close) {
       if (!hasKeys(body, 'lease_id') || !validId(body.lease_id)) throw new HttpError(400, 'invalid_body');
       const lease = this.leases.get(body.lease_id);
-      if (lease && lease.viewer.device_id === identity.device_id && lease.viewer.subject_hash === identity.subject_hash) {
+      if (lease && !lease.viewer.portal && lease.viewer.device_id === identity.device_id &&
+          lease.viewer.subject_hash === identity.subject_hash) {
         this.#closeLease(lease, 'viewer_closed');
       }
       return sendJson(res, 200, { closed: true });
     }
     if (!hasKeys(body, 'device_id', 'authority', 'grant_hash')) throw new HttpError(400, 'invalid_body');
-    if (typeof body.device_id !== 'string' || !body.device_id || body.device_id.length > 200) {
-      throw new HttpError(400, 'invalid_device_id');
-    }
-    if (!validAuthority(body.authority)) throw new HttpError(400, 'invalid_authority');
-    if (!validGrantHash(body.grant_hash)) throw new HttpError(400, 'invalid_grant_hash');
-    return sendJson(res, 200, this.#openLease(identity, body));
+    validateLeaseFields(body.device_id, body.authority, body.grant_hash);
+    return sendJson(res, 200, this.#openLease(identity, body.device_id, body.authority, body.grant_hash));
   }
 
-  #openLease(viewer, { device_id, authority, grant_hash }) {
-    if (device_id === viewer.device_id || this.db.findGoogleSubject(device_id) !== viewer.subject_hash) {
+  // Internal only: the portal authenticates the subject and owns the ephemeral
+  // viewer ID. No Web device, bearer token, or WS auth mode is minted for it.
+  portalDevices(subjectHash) {
+    if (this.closed) throw new HttpError(503, 'server_closed');
+    validateSubjectHash(subjectHash);
+    return this.db.listGoogleDevices(subjectHash, '').filter((row) =>
+      row.status === 'online' && this.#activeHost(row.device_id, subjectHash, true));
+  }
+
+  openPortalLease(options) {
+    if (this.closed) throw new HttpError(503, 'server_closed');
+    const { subjectHash, viewerId, deviceId, authority, grantHash } = options ?? {};
+    validateSubjectHash(subjectHash);
+    if (!validId(viewerId)) throw new HttpError(400, 'invalid_viewer_id');
+    validateLeaseFields(deviceId, authority, grantHash);
+    return this.#openLease({ device_id: viewerId, subject_hash: subjectHash, portal: true }, deviceId, authority, grantHash);
+  }
+
+  closePortalLease(viewerId, leaseId) {
+    const lease = this.#portalLease(viewerId, leaseId);
+    if (lease) this.#closeLease(lease, 'viewer_closed');
+    return { closed: true };
+  }
+
+  async connectPortalStream(viewerId, leaseId, { signal } = {}) {
+    if (this.closed) throw new HttpError(503, 'server_closed');
+    const lease = this.#portalLease(viewerId, leaseId);
+    if (!lease || !this.#liveLease(lease)) throw new HttpError(404, 'lease_not_found');
+    signal?.throwIfAborted();
+    if (this.#atSocketCapacity()) throw new HttpError(429, 'rate_limited');
+    return new Promise((resolve, reject) => {
+      const viewer = createPortalViewer({
+        signal, resolve, reject,
+        onMessage: (endpoint, frame) => this.#streamMessage(endpoint, frame),
+        onClose: (endpoint) => {
+          this.#portalViewers.delete(endpoint);
+          this.#socketClosed(endpoint);
+        },
+      });
+      this.#portalViewers.add(viewer);
+      this.#startStream(viewer, lease);
+    });
+  }
+
+  #portalLease(viewerId, leaseId) {
+    if (!validId(viewerId)) throw new HttpError(400, 'invalid_viewer_id');
+    if (!validId(leaseId)) throw new HttpError(400, 'invalid_lease_id');
+    const lease = this.leases.get(leaseId);
+    if (lease?.viewer.portal && lease.viewer.device_id === viewerId) return lease;
+    return null;
+  }
+
+  #atSocketCapacity() {
+    return this.sockets.size + this.#portalViewers.size >= MAX_SOCKETS;
+  }
+
+  #openLease(viewer, deviceId, authority, grantHash) {
+    if ((!viewer.portal && deviceId === viewer.device_id) || this.db.findGoogleSubject(deviceId) !== viewer.subject_hash) {
       throw new HttpError(404, 'device_not_found');
     }
-    const host = this.#activeHost(device_id, viewer.subject_hash);
-    if (!host) throw new HttpError(409, 'web_not_enabled');
+    const host = this.#activeHost(deviceId, viewer.subject_hash, viewer.portal);
+    if (!host || (viewer.portal && !this.db.listGoogleDevices(viewer.subject_hash, '').some((row) =>
+      row.device_id === deviceId && row.status === 'online'))) throw new HttpError(409, 'web_not_enabled');
     let viewerLeases = 0;
     for (const lease of this.leases.values()) {
-      if (this.#liveLease(lease) && lease.viewer.device_id === viewer.device_id) viewerLeases += 1;
+      if (this.#liveLease(lease) && lease.viewer.portal === viewer.portal && lease.viewer.device_id === viewer.device_id) {
+        viewerLeases += 1;
+      }
     }
     const now = performance.now();
+    const viewerKey = (viewer.portal ? 'portal:' : 'desktop:') + viewer.device_id;
     this.openAttempts = this.openAttempts.filter((attempt) => now - attempt.at < OPEN_WINDOW);
-    const viewerOpens = this.openAttempts.filter((attempt) => attempt.viewer === viewer.device_id).length;
+    const viewerOpens = this.openAttempts.filter((attempt) => attempt.viewer === viewerKey).length;
     if (viewerLeases >= VIEWER_LEASE_LIMIT || host.leases.size >= HOST_LEASE_LIMIT || this.leases.size >= MAX_LEASES ||
         viewerOpens >= OPEN_LIMIT || this.openAttempts.length >= GLOBAL_OPEN_LIMIT) {
       throw new HttpError(429, 'rate_limited');
     }
-    if (this.#activeHost(device_id, viewer.subject_hash) !== host) throw new HttpError(409, 'web_not_enabled');
-    this.openAttempts.push({ viewer: viewer.device_id, at: now });
+    if (this.#activeHost(deviceId, viewer.subject_hash, viewer.portal) !== host) throw new HttpError(409, 'web_not_enabled');
+    this.openAttempts.push({ viewer: viewerKey, at: now });
     const lease = {
-      id: newId(), host, viewer, authority, grantHash: grant_hash,
+      id: newId(), host, viewer, authority, grantHash,
       expiresAt: this.db.now() + this.leaseTtlMs,
       deadline: now + this.leaseTtlMs,
       streams: new Set(), starts: new RateLimit(16, 16), closed: false,
@@ -161,7 +331,7 @@ export class WebRelay {
       rejectUpgrade(socket, 503, 'server_closed');
       return true;
     }
-    if (this.sockets.size >= MAX_SOCKETS || this.unauthenticated.size >= MAX_UNAUTHENTICATED) {
+    if (this.#atSocketCapacity() || this.unauthenticated.size >= MAX_UNAUTHENTICATED) {
       rejectUpgrade(socket, 429, 'rate_limited');
       return true;
     }
@@ -191,7 +361,10 @@ export class WebRelay {
     if (performance.now() >= conn.authDeadline) return conn.close(1008, 'auth_timeout');
     const fields = { host: 'fingerprint', viewer: 'lease_id', join: 'connection_id' };
     const mode = message?.type;
-    if (typeof mode !== 'string' || !Object.hasOwn(fields, mode) || !hasKeys(message, 'type', 'token', fields[mode])) {
+    const portalAccess = mode === 'host' && message.portal_access === true &&
+      hasKeys(message, 'type', 'token', 'fingerprint', 'portal_access');
+    if (typeof mode !== 'string' || !Object.hasOwn(fields, mode) ||
+        (!portalAccess && !hasKeys(message, 'type', 'token', fields[mode]))) {
       return conn.close(1008, 'invalid_auth');
     }
     let identity;
@@ -204,28 +377,29 @@ export class WebRelay {
     clearTimeout(conn.authTimer);
     this.unauthenticated.delete(conn);
     conn.role = mode;
-    if (mode === 'host') return this.#registerHost(conn, identity, message.fingerprint);
+    if (mode === 'host') return this.#registerHost(conn, identity, message.fingerprint, portalAccess);
     if (mode === 'viewer') return this.#startViewer(conn, identity, message.lease_id);
     return this.#join(conn, identity, message.connection_id);
   }
 
-  #registerHost(conn, identity, fingerprint) {
+  #registerHost(conn, identity, fingerprint, portalAccess) {
     if (typeof fingerprint !== 'string' || fingerprint.length !== 64 || !/^[0-9a-f]+$/.test(fingerprint)) {
       return conn.close(1008, 'invalid_fingerprint');
     }
     // The object itself is the control generation; replacements revoke rather than migrate leases.
     this.hosts.get(identity.device_id)?.conn.close(1001, 'host_replaced');
     const host = {
-      conn, identity, fingerprint, leases: new Set(), streams: 0, starts: new RateLimit(64, 64),
+      conn, identity, fingerprint, portalAccess, leases: new Set(), streams: 0, starts: new RateLimit(64, 64),
     };
     conn.host = host;
     this.hosts.set(identity.device_id, host);
     if (!conn.send({ type: 'ready' })) conn.close(1008, 'backpressure');
   }
 
-  #activeHost(deviceId, subjectHash) {
+  #activeHost(deviceId, subjectHash, requirePortal = false) {
     const host = this.hosts.get(deviceId);
-    if (!host || host.conn.closed || host.identity.subject_hash !== subjectHash) return null;
+    if (!host || host.conn.closed || host.identity.subject_hash !== subjectHash ||
+        (requirePortal && !host.portalAccess)) return null;
     if (performance.now() - host.conn.lastPongAt >= this.pongTimeoutMs) {
       host.conn.close(1001, 'pong_timeout');
       return null;
@@ -240,8 +414,12 @@ export class WebRelay {
       return false;
     }
     const { identity } = lease.host;
-    if (this.#activeHost(identity.device_id, identity.subject_hash) !== lease.host) {
+    if (this.#activeHost(identity.device_id, identity.subject_hash, lease.viewer.portal) !== lease.host) {
       this.#closeLease(lease, 'host_closed');
+      return false;
+    }
+    if (lease.viewer.portal && this.db.findGoogleSubject(identity.device_id) !== lease.viewer.subject_hash) {
+      lease.host.conn.close(1008, 'google_binding_required');
       return false;
     }
     return true;
@@ -249,13 +427,20 @@ export class WebRelay {
 
   #startViewer(conn, viewer, id) {
     const lease = validId(id) && this.leases.get(id);
-    if (!lease || viewer.device_id !== lease.viewer.device_id || viewer.subject_hash !== lease.viewer.subject_hash ||
-        !this.#liveLease(lease)) return conn.close(1008, 'lease_not_found');
+    if (!lease || lease.viewer.portal || viewer.device_id !== lease.viewer.device_id ||
+        viewer.subject_hash !== lease.viewer.subject_hash || !this.#liveLease(lease)) {
+      return conn.close(1008, 'lease_not_found');
+    }
     const host = lease.host;
     if (this.db.findGoogleSubject(host.identity.device_id) !== viewer.subject_hash) {
       host.conn.close(1008, 'google_binding_required');
       return conn.close(1008, 'lease_not_found');
     }
+    return this.#startStream(conn, lease);
+  }
+
+  #startStream(conn, lease) {
+    const host = lease.host;
     if (lease.streams.size >= LEASE_STREAM_LIMIT || host.streams >= HOST_STREAM_LIMIT ||
         !lease.starts.take() || !host.starts.take()) return conn.close(1008, 'rate_limited');
     const stream = {
@@ -279,7 +464,9 @@ export class WebRelay {
         identity.subject_hash !== stream.lease.host.identity.subject_hash) return conn.close(1008, 'connection_not_found');
     if (performance.now() >= stream.deadline) this.#closeStream(stream, 1008, 'join_timeout');
     if (stream.closed || !this.#liveLease(stream.lease)) return conn.close(1008, 'connection_not_found');
-    if (this.db.findGoogleSubject(stream.lease.viewer.device_id) !== identity.subject_hash) {
+    // A portal viewer is vouched for by the owner of its internal lease; it
+    // has no vault row. The joining host and its control generation are still checked.
+    if (!stream.lease.viewer.portal && this.db.findGoogleSubject(stream.lease.viewer.device_id) !== identity.subject_hash) {
       this.#closeLease(stream.lease, 'google_binding_required');
       return conn.close(1008, 'connection_not_found');
     }
@@ -381,7 +568,8 @@ export class WebRelay {
       } else conn.ping();
     }
     for (const lease of this.leases.values()) {
-      if (this.#liveLease(lease) && this.db.findGoogleSubject(lease.viewer.device_id) !== lease.viewer.subject_hash) {
+      if (this.#liveLease(lease) && !lease.viewer.portal &&
+          this.db.findGoogleSubject(lease.viewer.device_id) !== lease.viewer.subject_hash) {
         this.#closeLease(lease, 'google_binding_required');
       }
     }

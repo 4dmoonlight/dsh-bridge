@@ -11,6 +11,7 @@ window.__ModuleLoader__.load({
     const API = '/api/cross-device'
     const GOOGLE_START_PATH = '/web/google/start'
     const CONTROL_PATH = '/web/control'
+    const PORTAL_CONTROL_PATH = '/web/portal-control'
     const GOOGLE_ORIGIN = 'https://accounts.google.com'
     const GOOGLE_AUTH_PATH = '/o/oauth2/v2/auth'
     const STATUS_PATH = '/web/status'
@@ -52,6 +53,7 @@ window.__ModuleLoader__.load({
       relay_not_supported: '本机 DSH 运行环境不支持远程控制，请升级后重试。',
       relay_view_limit: '已打开的远程窗口过多，请关闭不再使用的窗口后重试。',
       local_control_only: '请在本机直接打开 DSH 后修改远程控制设置。',
+      remote_control_required: '请先允许远程控制本机。',
       unauthorized: '凭据无效或已过期，请检查本机 DSH 配置。',
       hub_error: '无法连接中继，请检查中继连接后重试。',
       hub_unavailable: '无法连接中继，请检查中继连接后重试。',
@@ -90,7 +92,7 @@ window.__ModuleLoader__.load({
         body: post ? JSON.stringify(payload) : undefined,
         credentials: 'same-origin', mode: 'same-origin', redirect: 'error', cache: 'no-store', signal,
         // These routes require the real browser Origin even under a no-referrer document policy.
-        ...(route === GOOGLE_START_PATH || route === CONTROL_PATH ? { referrerPolicy: 'origin' } : null),
+        ...([GOOGLE_START_PATH, CONTROL_PATH, PORTAL_CONTROL_PATH].includes(route) ? { referrerPolicy: 'origin' } : null),
       })
       const data = await response.json().catch(() => null)
       if (!response.ok) {
@@ -158,6 +160,7 @@ window.__ModuleLoader__.load({
         hub_url: typeof data.hub_url === 'string' ? googleHubAddress(data.hub_url) : '',
         web_error: data.web_error ? errorMessage({ message: typeof data.web_error === 'string' ? data.web_error : undefined }) : '',
         remote_control_enabled: google && data.remote_control_enabled === true,
+        portal_access_enabled: google && data.remote_control_enabled === true && data.portal_access_enabled === true,
         control_ready: google && data.control_ready === true,
         control_error: typeof data.control_error === 'string' && data.control_error ? errorMessage({ message: data.control_error }) : '',
         devices: google ? data.devices.filter((dev) => dev && typeof dev.device_id === 'string' && dev.device_id &&
@@ -300,9 +303,11 @@ window.__ModuleLoader__.load({
       const googleNotice = !googleSignedIn && feedback?.scope === 'google' &&
         (feedback.hub === undefined || feedback.hub === googleHub) ? feedback : null
       const controlEnabled = data?.remote_control_enabled === true
+      const portalEnabled = data?.portal_access_enabled === true
       // Disabling is a local revocation. Never gate it on a Hub response, even
-      // when the switch is shown from the last known local status.
+      // when the switches are shown from the last known local status.
       const controlDisabled = busy || !googleSignedIn || (!controlEnabled && (web.loading || Boolean(statusError)))
+      const portalDisabled = busy || !googleSignedIn || (!portalEnabled && (!controlEnabled || web.loading || Boolean(statusError)))
 
       function setControl(enabled) {
         if (controlDisabled || enabled === controlEnabled) return
@@ -311,8 +316,22 @@ window.__ModuleLoader__.load({
           const result = await request(CONTROL_PATH, controller.signal, { enabled })
           return () => {
             requireOk(result)
-            updateWeb((status) => ({ ...status, remote_control_enabled: enabled, control_ready: false, control_error: '' }))
+            updateWeb((status) => ({ ...status, remote_control_enabled: enabled,
+              portal_access_enabled: enabled && status.portal_access_enabled, control_ready: false, control_error: '' }))
             return { text: enabled ? '已允许远程控制本机。' : '已关闭远程控制，其他设备无法再通过中继访问本机。' }
+          }
+        })
+      }
+
+      function setPortalControl(enabled) {
+        if (portalDisabled || enabled === portalEnabled) return
+        if (enabled && !window.confirm('开启后，可直接在服务器网页访问本机，无需在访问端安装 DSH 插件。您的中继（Hub）和终止 TLS 的服务器在整个中继租约期间都能读取明文 DSH 内容，并以本机 DSH 所有者身份执行操作（包括使用终端）。仅在信任它们时开启。确定开启吗？')) return
+        void run('web', async ({ controller }) => {
+          const result = await request(PORTAL_CONTROL_PATH, controller.signal, { enabled })
+          return () => {
+            requireOk(result)
+            updateWeb((status) => ({ ...status, portal_access_enabled: enabled, control_ready: false, control_error: '' }))
+            return { text: enabled ? '已允许从服务器网页访问本机。' : '已关闭从服务器网页访问本机。' }
           }
         })
       }
@@ -400,6 +419,9 @@ window.__ModuleLoader__.load({
           h('p', { style: S.meta }, '默认关闭，重启 DSH 后需重新开启。关闭后，其他设备对本机 DSH 的中继访问会被切断。'),
           message(!controlEnabled ? '远程控制已关闭。' : data.control_ready && !statusError ? '远程控制已就绪。' : '已允许远程控制，等待中继就绪。'),
           controlEnabled && !data.control_ready && data.control_error ? message(data.control_error, true) : null,
+          h('label', { style: S.row }, '允许从服务器网页访问本机',
+            h('input', { type: 'checkbox', role: 'switch', checked: portalEnabled, disabled: portalDisabled, onChange: (event) => setPortalControl(event.target.checked === true) })),
+          h('p', { style: S.meta }, '须先允许远程控制，默认关闭。重启 DSH 或关闭远程控制后需重新开启。更改此设置会断开本机现有的中继连接。'),
         ) : null,
         googleSignedIn ? h('section', { 'aria-label': '同账号设备', 'aria-busy': web.loading, style: S.section },
           h('h2', { style: S.heading }, '同账号设备'),

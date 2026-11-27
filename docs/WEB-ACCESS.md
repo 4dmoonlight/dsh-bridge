@@ -20,6 +20,48 @@ must be awake and running DSH for control. The plugin uses the installed DSH
 Web authentication service on the target; its native owner credential never
 crosses the Hub and is not exposed to the viewing browser.
 
+## Browser-only entry (optional)
+
+A configured Hub serves the device list at its HTTPS origin plus /remote.
+A viewing phone or computer needs only a browser. Sign into Google with the
+same account as the target, then select an online target that has explicitly
+allowed access from the server website. This opens the target’s actual DSH
+Web, not a copy of its UI. Both target switches start off after a DSH restart.
+Turning either switch off disconnects active browser sessions. The original
+plugin-to-plugin mode does not require enabling the browser mode.
+
+**Trust the Hub and its HTTPS reverse proxy.** This mode terminates the Web
+session on your server, which can read the DSH content and act with DSH owner
+permissions while the portal lease is valid. The target’s native DSH cookie
+stays on the target. The browser never receives a persistent Web device token.
+
+Set BRIDGE_PORTAL_ORIGIN to the exact HTTPS origin of the existing Hub Google
+callback, without a trailing slash. Set BRIDGE_PORTAL_DATA_DOMAIN to a separate
+dedicated subdomain, such as views.example.net. Configure wildcard DNS and
+correctly validated HTTPS for *.views.example.net. Route those hosts to the
+same Hub process, preserving the original Host, and allow WebSocket upgrades.
+By default the data origin uses standard HTTPS (443). For a separate HTTPS
+listener on 8443, set BRIDGE_PORTAL_DATA_PORT=8443 and forward the complete
+Host including :8443. This setting alone only changes the public data URL.
+For direct TLS, also set BRIDGE_PORTAL_TLS_CERT_FILE and
+BRIDGE_PORTAL_TLS_KEY_FILE to absolute paths readable by the Hub service. The
+built-in listener binds IPv4 port 8443 and serves only the data origin. The
+ordinary Hub stays on loopback. Renew the trusted wildcard certificate before
+it expires; the built-in listener reads it on restart. A DNS-only listener
+publishes the origin IP and may be unreachable from networks that block 8443.
+Make the wildcard data host scope exclusive to the portal; disable response
+caching, content modification and logging of query strings, headers or bodies.
+Rate-limit new login attempts by trusted client IP at the edge. Verify TLS
+on both legs if an external edge terminates public TLS. Never cache /remote or
+data responses. The portal is off when both variables are unset. Partial or
+mismatched configuration fails startup. Do not use path-based isolation on
+the main Hub origin or reuse data hostnames across sessions. The login session
+lasts one hour; individual views follow bounded relay leases and each uses a
+different origin. The portal exposes native DSH Web and its MUX; it does not
+expose target sign-in, cross-device controls, or arbitrary custom HTTP routes.
+Use a current browser (Safari 16.4 or later); some native operations require
+[Fetch Metadata headers](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Sec-Fetch-Site).
+
 ## Hub setup: enable Google sign-in
 
 Each computer signs in with the same allowlisted account. Upgrade both ends of

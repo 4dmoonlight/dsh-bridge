@@ -91,8 +91,11 @@ function openRelay(hub, frame, expected, { signal, onFrame, onClose }) {
   })
 }
 
-export function registerRelayHost(hub, token, fingerprint, callbacks) {
-  return openRelay(hub, { type: 'host', token, fingerprint }, 'ready', callbacks)
+export function registerRelayHost(hub, token, fingerprint, { portalAccess, ...callbacks }) {
+  const frame = { type: 'host', token, fingerprint }
+  // An explicit false would break legacy Hubs' exact normal-mode frame shape.
+  if (portalAccess === true) frame.portal_access = true
+  return openRelay(hub, frame, 'ready', callbacks)
 }
 
 // Wrap one independent WSS stream as a bounded duplex transport for node:tls.
@@ -183,6 +186,7 @@ export async function connectRelayStream(hub, frame, signal) {
     onFrame(value) { stream?.receive(value) },
     onClose() { stream?.destroy() },
   })
+  if (signal?.aborted) throw relayError('relay_closed')
   stream = new RelayStream(ws)
   return stream
 }

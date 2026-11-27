@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { createHubApp } from './app.js';
 import { openDatabase } from './db.js';
@@ -10,7 +10,6 @@ const args = parseArgs(process.argv.slice(2));
 const dataDir = resolve(args['data-dir'] ?? process.env.BRIDGE_DATA_DIR ?? join(homedir(), '.dsh-bridge'));
 const host = args.host ?? process.env.BRIDGE_HOST ?? '127.0.0.1';
 const port = Number(args.port ?? process.env.BRIDGE_PORT ?? 8787);
-const token = await resolveToken(dataDir, process.env.BRIDGE_TOKEN ?? args.token);
 const google = {
   clientId: process.env.BRIDGE_GOOGLE_CLIENT_ID,
   clientSecret: process.env.BRIDGE_GOOGLE_CLIENT_SECRET,
@@ -19,12 +18,29 @@ const google = {
   returnOrigins: parseCsv(process.env.BRIDGE_GOOGLE_RETURN_ORIGINS),
 };
 
+const portalConfig = {
+  origin: process.env.BRIDGE_PORTAL_ORIGIN,
+  dataDomain: process.env.BRIDGE_PORTAL_DATA_DOMAIN,
+  dataPort: process.env.BRIDGE_PORTAL_DATA_PORT,
+};
+const portal = Object.values(portalConfig).some(value => value !== undefined) ? portalConfig : undefined;
+const portalTls = await portalTlsCredentials(portal);
+const token = await resolveToken(dataDir, process.env.BRIDGE_TOKEN ?? args.token);
+
 // Open bridge.sqlite before listening so a broken schema/database fails at
 // startup instead of on the first cross-device request. The app attaches the
 // /api/v1/ws 'upgrade' handler when it creates the HTTP server.
 const db = openDatabase({ dataDir });
-const app = await createHubApp({ dataDir, instanceToken: token, db, google });
-const { port: actualPort, url } = await app.listen(port, host);
+const app = await createHubApp({ dataDir, instanceToken: token, db, google, portal });
+let httpListening;
+try {
+  httpListening = await app.listen(port, host);
+  if (portalTls) await app.listenPortalTls({ ...portalTls, port: 8443, host: '0.0.0.0' });
+} catch (error) {
+  await app.close();
+  throw error;
+}
+const { port: actualPort, url } = httpListening;
 
 console.log(
   JSON.stringify({
@@ -32,6 +48,7 @@ console.log(
     url,
     host,
     port: actualPort,
+    ...(portalTls && { portalTls: { host: '0.0.0.0', port: 8443 } }),
     dataDir,
     database: db.file,
     protocol: app.version,
@@ -49,6 +66,19 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
     await app.close();
     process.exit(0);
   });
+}
+
+async function portalTlsCredentials(portal) {
+  const certFile = process.env.BRIDGE_PORTAL_TLS_CERT_FILE;
+  const keyFile = process.env.BRIDGE_PORTAL_TLS_KEY_FILE;
+  if (certFile === undefined && keyFile === undefined) return undefined;
+  if (!certFile || !keyFile) {
+    throw new Error('Set both BRIDGE_PORTAL_TLS_CERT_FILE and BRIDGE_PORTAL_TLS_KEY_FILE');
+  }
+  if (!isAbsolute(certFile) || !isAbsolute(keyFile)) throw new Error('Portal TLS certificate and key paths must be absolute');
+  if (!portal || portal.dataPort !== '8443') throw new Error('Portal TLS requires a configured Web portal and BRIDGE_PORTAL_DATA_PORT=8443');
+  const [cert, key] = await Promise.all([readFile(certFile), readFile(keyFile)]);
+  return { cert, key };
 }
 
 async function resolveToken(dir, provided) {
