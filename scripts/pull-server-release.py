@@ -412,8 +412,9 @@ def http_probe(host, port, path, *, tls, loopback_tls=False, expected=200, shape
     connection = factory(host, port, timeout=TIMEOUT)
     try:
         with deadline(TIMEOUT):
-            # Cache busting for every request (including anonymous authorization checks).
-            query = '?release_probe=' + secrets.token_hex(16)
+            # Only /healthz accepts arbitrary query strings. The portal routes
+            # require exact request targets, and already return Cache-Control: no-store.
+            query = '?release_probe=' + secrets.token_hex(16) if path == '/healthz' else ''
             connection.request('GET', path + query, headers={
                 'Cache-Control': 'no-cache, no-store', 'Pragma': 'no-cache', 'Connection': 'close',
             })

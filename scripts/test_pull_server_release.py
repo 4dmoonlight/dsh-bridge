@@ -150,6 +150,23 @@ class ArtifactsTest(unittest.TestCase):
             pull.unpack(archive(package()), TAG)
 
 
+class ProbeRequestTest(unittest.TestCase):
+    def test_cache_buster_applies_to_health_only(self):
+        for path, status in (('/healthz', 200), ('/remote', 200), ('/remote/api/devices', 401)):
+            with self.subTest(path=path), patch.object(pull.http.client, 'HTTPSConnection') as factory:
+                conn = factory.return_value
+                conn.getresponse.return_value.__enter__.return_value.status = status
+                pull.http_probe('hub.example.test', 443, path, tls=True, expected=status)
+                method, target = conn.request.call_args.args
+                self.assertEqual(method, 'GET')
+                if path == '/healthz':
+                    self.assertRegex(target, r'^/healthz[?]release_probe=[a-f0-9]{32}$')
+                else:
+                    self.assertEqual(target, path)
+                self.assertEqual(conn.request.call_args.kwargs['headers']['Cache-Control'], 'no-cache, no-store')
+                conn.close.assert_called_once_with()
+
+
 class RolloutTest(unittest.TestCase):
     def setUp(self):
         self.work = Path(tempfile.mkdtemp())
