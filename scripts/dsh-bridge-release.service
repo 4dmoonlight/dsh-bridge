@@ -1,0 +1,25 @@
+[Unit]
+Description=Activate a tested DSH Bridge Hub release
+Wants=network-online.target
+After=network-online.target dsh-bridge.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/bin/python3 /usr/local/lib/dsh-bridge-release/pull-server-release.py --config /etc/dsh-bridge/release.json
+TimeoutStartSec=5min
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectHome=yes
+ProtectSystem=strict
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/dsh-bridge-release /opt/dsh-bridge-rollouts/releases /etc/systemd/system/dsh-bridge.service.d
+InaccessiblePaths=-/etc/dsh-bridge/google.env -/etc/dsh-bridge/portal-key.pem -/var/lib/dsh-bridge

@@ -118,8 +118,65 @@ Check from anywhere: @@curl -fsS https://hub.example.com/healthz@@.
 cd /opt/dsh-bridge && sudo bash scripts/deploy-server.sh --domain hub.example.com
 ```
 
-Idempotent: pulls @@origin/main@@, keeps the existing token and data, restarts the
-service, health-checks again. CI never touches this server; deploys are manual.
+Idempotent: pulls `origin/main`, keeps the existing token and data, restarts the
+service, and checks health again. Do not run the bootstrap installer to update
+a Hub that is managed by the release puller below.
+
+## Optional release-driven automatic deployments
+
+A push to `main` runs CI only. On a reviewed `main` commit, publish a new
+version by pushing a stable `hub-vMAJOR.MINOR.PATCH` tag. The GitHub release
+workflow runs tests before publishing a server-only archive and its SHA-256
+checksum in a GitHub Release. Use a new, increasing version for each rollout.
+Limit creation, updates and deletion of `hub-v*` tags to trusted maintainers,
+and protect `main` in the GitHub repository settings. Never move a released tag.
+
+For example, after reviewing the current `origin/main` commit:
+
+```bash
+git fetch origin main
+git tag -a hub-v0.1.0 origin/main -m "Hub v0.1.0"
+git push origin refs/tags/hub-v0.1.0
+```
+
+On an existing systemd installation, create a root-only JSON configuration such as:
+
+```json
+{
+  "repository": "4dmoonlight/dsh-bridge",
+  "public_origin": "https://hub.example.com",
+  "loopback_port": 8787,
+  "portal_data_domain": "views.example.com",
+  "portal_data_port": 8443,
+  "portal_data_public_probe": true
+}
+```
+
+Omit the portal fields if the portal is disabled. For a separate reverse proxy
+on port 443, use `portal_data_port: 443`. For the direct HTTPS listener,
+enable the public data probe to verify wildcard DNS and TLS at rollout.
+
+```bash
+sudo bash scripts/install-server-release-pull.sh /absolute/path/release.json --enable
+sudo systemctl start dsh-bridge-release.service
+sudo systemctl status dsh-bridge-release.timer
+sudo journalctl -u dsh-bridge-release.service -n 30 --no-pager
+```
+
+The timer checks the latest published public release about every five minutes.
+It uses outbound HTTPS, without a GitHub token or incoming SSH from Actions.
+The puller validates the archive and manifest, extracts only the server
+package into a new version directory, and switches only the Hub process.
+The existing unit, Google config, TLS key and database are left in place.
+Loopback and public checks gate promotion. A failed switch restores the
+previous selector, and that failed version is not retried automatically.
+The privileged puller itself is not part of these releases and does not
+self-update. Upgrade it separately as an operator. A known-good newer release
+is the normal recovery path. To stop picking up
+new releases, run `sudo systemctl disable --now dsh-bridge-release.timer`.
+
+This is not a database rollback. Promote only backward-compatible database
+migrations, or plan a separate tested backup and restore before publishing.
 
 ## Uninstall
 

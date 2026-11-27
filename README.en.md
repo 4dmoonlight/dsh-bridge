@@ -95,7 +95,7 @@ BRIDGE_PORT=8787 BRIDGE_DATA_DIR=~/.dsh-bridge/hub-data \
 ```
 
 For remote deployments always put it behind TLS (Caddy, nginx, Cloudflare Tunnel).
-See [docs/INSTALL.md](docs/INSTALL.md).
+See [installation](docs/INSTALL.md). For the Hub, [optional release-driven deployments](docs/DEPLOY.md#optional-release-driven-automatic-deployments) do not restart the server on ordinary pushes.
 
 ## Docs
 

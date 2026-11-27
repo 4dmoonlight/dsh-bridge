@@ -1,0 +1,11 @@
+[Unit]
+Description=Check GitHub for an approved DSH Bridge Hub release
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=5min
+AccuracySec=30s
+Unit=dsh-bridge-release.service
+
+[Install]
+WantedBy=timers.target

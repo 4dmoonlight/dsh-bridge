@@ -75,7 +75,7 @@ BRIDGE_PORT=8787 BRIDGE_DATA_DIR=~/.dsh-bridge/hub-data \
   node apps/server/src/index.js
 ```
 
-远程部署请务必放在 TLS 反代后面（Caddy/nginx/Cloudflare Tunnel），见 [docs/INSTALL.md](docs/INSTALL.md)。
+远程部署请务必放在 TLS 反代后面（Caddy/nginx/Cloudflare Tunnel），见 [安装说明](docs/INSTALL.md)。Hub 可选用 [发布驱动的自动部署](docs/DEPLOY.md#optional-release-driven-automatic-deployments)，普通推送不会重启服务器。
 
 ## 一起看
 
